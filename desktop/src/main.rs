@@ -11,15 +11,19 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("TransFEL")
-            .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([900.0, 600.0]),
+            .with_inner_size([1250.0, 800.0])
+            .with_min_inner_size([950.0, 650.0]),
         ..Default::default()
     };
 
     eframe::run_native(
         "TransFEL",
         options,
-        Box::new(|_cc| Ok(Box::new(TransfelApp::new()))),
+        Box::new(|cc| {
+            Ok(Box::new(
+                TransfelApp::new(cc)
+            ))
+        }),
     )
 }
 
@@ -30,49 +34,85 @@ struct TransfelApp {
     android: String,
     resolution: String,
     density: String,
+
     status: String,
 
     streaming: bool,
 
     frames_received: Arc<Mutex<u64>>,
 
-    frame_receiver: mpsc::Receiver<Vec<u8>>,
-    frame_sender: mpsc::SyncSender<Vec<u8>>,
+    frame_receiver:
+        mpsc::Receiver<Vec<u8>>,
 
-    texture: Option<egui::TextureHandle>,
+    frame_sender:
+        mpsc::SyncSender<Vec<u8>>,
+
+    texture:
+        Option<egui::TextureHandle>,
 
     video_width: usize,
     video_height: usize,
 }
 
 impl TransfelApp {
-    fn new() -> Self {
-        let frames_received =
-            Arc::new(Mutex::new(0));
 
-        let (frame_sender, frame_receiver) =
-            mpsc::sync_channel::<Vec<u8>>(1);
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+    ) -> Self {
+
+        /*
+         * Tema oscuro.
+         */
+
+        cc.egui_ctx.set_visuals(
+            egui::Visuals::dark()
+        );
+
+        let frames_received =
+            Arc::new(
+                Mutex::new(0)
+            );
+
+        let (
+            frame_sender,
+            frame_receiver
+        ) =
+            mpsc::sync_channel::<Vec<u8>>(
+                1
+            );
 
         let resolution =
             Arc::new(
                 Mutex::new(
-                    (720usize, 1280usize)
+                    (
+                        720usize,
+                        1280usize
+                    )
                 )
             );
 
         let mut app = Self {
+
             device: None,
 
-            model: "-".to_string(),
-            android: "-".to_string(),
-            resolution: "-".to_string(),
-            density: "-".to_string(),
+            model:
+                "-".to_string(),
+
+            android:
+                "-".to_string(),
+
+            resolution:
+                "-".to_string(),
+
+            density:
+                "-".to_string(),
 
             status:
                 "Buscando dispositivo..."
                     .to_string(),
 
-            streaming: false,
+            streaming:
+                false,
 
             frames_received:
                 Arc::clone(
@@ -84,10 +124,14 @@ impl TransfelApp {
             frame_sender:
                 frame_sender.clone(),
 
-            texture: None,
+            texture:
+                None,
 
-            video_width: 720,
-            video_height: 1280,
+            video_width:
+                720,
+
+            video_height:
+                1280,
         };
 
         app.detect_device(
@@ -104,6 +148,7 @@ impl TransfelApp {
     }
 
     fn ffmpeg_path() -> PathBuf {
+
         let exe =
             std::env::current_exe()
                 .unwrap_or_else(|_| {
@@ -148,6 +193,7 @@ impl TransfelApp {
     }
 
     fn adb_path() -> PathBuf {
+
         let exe =
             std::env::current_exe()
                 .unwrap_or_else(|_| {
@@ -271,7 +317,7 @@ impl TransfelApp {
                 self.clear_device();
 
                 self.status =
-                    "No hay dispositivos conectados"
+                    "Conecta tu dispositivo Android"
                         .to_string();
             }
 
@@ -280,7 +326,7 @@ impl TransfelApp {
                 self.clear_device();
 
                 self.status =
-                    "No se encontro ADB"
+                    "No se pudo iniciar ADB"
                         .to_string();
             }
         }
@@ -290,8 +336,7 @@ impl TransfelApp {
         &mut self
     ) {
 
-        self.device =
-            None;
+        self.device = None;
 
         self.model =
             "-".to_string();
@@ -305,8 +350,7 @@ impl TransfelApp {
         self.density =
             "-".to_string();
 
-        self.texture =
-            None;
+        self.texture = None;
     }
 
     fn get_device_info(
@@ -454,8 +498,10 @@ impl TransfelApp {
         &mut self,
         frames_received:
             Arc<Mutex<u64>>,
+
         frame_sender:
             mpsc::SyncSender<Vec<u8>>,
+
         resolution:
             Arc<Mutex<(usize, usize)>>,
     ) {
@@ -481,7 +527,7 @@ impl TransfelApp {
                         Err(error) => {
 
                             println!(
-                                "ERROR PUERTO 5000: {}",
+                                "Error puerto 5000: {}",
                                 error
                             );
 
@@ -490,7 +536,7 @@ impl TransfelApp {
                     };
 
                 println!(
-                    "Servidor TransFEL escuchando en 5000"
+                    "TransFEL listo"
                 );
 
                 for connection
@@ -500,10 +546,6 @@ impl TransfelApp {
                     match connection {
 
                         Ok(stream) => {
-
-                            println!(
-                                "Android conectado"
-                            );
 
                             let current_resolution =
                                 resolution
@@ -558,7 +600,7 @@ impl eframe::App for TransfelApp {
     ) {
 
         /*
-         * Tomamos solamente el frame
+         * Obtener solamente el frame
          * mas reciente.
          */
 
@@ -574,7 +616,7 @@ impl eframe::App for TransfelApp {
         }
 
         /*
-         * Actualizamos la textura.
+         * Actualizar video.
          */
 
         if let Some(frame) =
@@ -625,319 +667,568 @@ impl eframe::App for TransfelApp {
         }
 
         /*
-         * Encabezado.
+         * Colores de interfaz.
          */
 
-        ui.heading(
-            "TransFEL"
+        let background =
+            egui::Color32::from_rgb(
+                15,
+                15,
+                18
+            );
+
+        let panel =
+            egui::Color32::from_rgb(
+                22,
+                22,
+                27
+            );
+
+        let card =
+            egui::Color32::from_rgb(
+                28,
+                28,
+                34
+            );
+
+        let border =
+            egui::Color32::from_rgb(
+                55,
+                55,
+                65
+            );
+
+        let accent =
+            egui::Color32::from_rgb(
+                90,
+                130,
+                255
+            );
+
+        let success =
+            egui::Color32::from_rgb(
+                70,
+                200,
+                120
+            );
+
+        ui.painter().rect_filled(
+            ui.max_rect(),
+            0.0,
+            background
         );
 
-        ui.separator();
+        /*
+         * Barra superior.
+         */
 
-        ui.horizontal(
+        egui::Panel::top(
+            "top_bar"
+        )
+        .frame(
+            egui::Frame::new()
+                .fill(panel)
+                .inner_margin(
+                    egui::Margin::symmetric(
+                        20,
+                        12
+                    )
+                )
+        )
+        .show(
+            ui,
             |ui| {
 
-                if ui
-                    .button(
-                        "Buscar dispositivo"
-                    )
-                    .clicked()
-                {
+                ui.horizontal(
+                    |ui| {
 
-                    let resolution =
-                        Arc::new(
-                            Mutex::new(
-                                (
-                                    self.video_width,
-                                    self.video_height,
-                                )
+                        ui.heading(
+                            egui::RichText::new(
+                                "TransFEL"
                             )
+                            .size(22.0)
+                            .strong()
                         );
 
-                    self.detect_device(
-                        &resolution
-                    );
-                }
+                        ui.add_space(
+                            15.0
+                        );
 
-                ui.label(
-                    &self.status
+                        let status_color =
+                            if self.device.is_some() {
+                                success
+                            } else {
+                                egui::Color32::GRAY
+                            };
+
+                        ui.colored_label(
+                            status_color,
+                            if self.device.is_some() {
+                                "● Dispositivo conectado"
+                            } else {
+                                "● Sin dispositivo"
+                            }
+                        );
+
+                        ui.with_layout(
+                            egui::Layout::right_to_left(
+                                egui::Align::Center
+                            ),
+                            |ui| {
+
+                                if ui
+                                    .button(
+                                        "Buscar dispositivo"
+                                    )
+                                    .clicked()
+                                {
+
+                                    let resolution =
+                                        Arc::new(
+                                            Mutex::new(
+                                                (
+                                                    self.video_width,
+                                                    self.video_height,
+                                                )
+                                            )
+                                        );
+
+                                    self.detect_device(
+                                        &resolution
+                                    );
+                                }
+                            }
+                        );
+                    }
                 );
             }
         );
 
-        ui.add_space(
-            10.0
+        /*
+         * Barra lateral.
+         */
+
+        egui::Panel::left(
+            "sidebar"
+        )
+        .resizable(true)
+        .default_size(260.0)
+        .size_range(220.0..=320.0)
+        .frame(
+            egui::Frame::new()
+                .fill(panel)
+                .inner_margin(
+                    egui::Margin::same(
+                        16
+                    )
+                )
+        )
+        .show(
+            ui,
+            |ui| {
+
+                /*
+                 * Informacion del dispositivo.
+                 */
+
+                ui.label(
+                    egui::RichText::new(
+                        "DISPOSITIVO"
+                    )
+                    .size(12.0)
+                    .strong()
+                    .color(
+                        egui::Color32::GRAY
+                    )
+                );
+
+                ui.add_space(
+                    8.0
+                );
+
+                egui::Frame::group(
+                    ui.style()
+                )
+                .fill(card)
+                .stroke(
+                    egui::Stroke::new(
+                        1.0,
+                        border
+                    )
+                )
+                .show(
+                    ui,
+                    |ui| {
+
+                        ui.set_width(
+                            ui.available_width()
+                        );
+
+                        ui.label(
+                            egui::RichText::new(
+                                &self.model
+                            )
+                            .size(18.0)
+                            .strong()
+                        );
+
+                        ui.add_space(
+                            8.0
+                        );
+
+                        ui.label(
+                            format!(
+                                "Android {}",
+                                self.android
+                            )
+                        );
+
+                        ui.label(
+                            format!(
+                                "{}",
+                                self.resolution
+                            )
+                        );
+
+                        ui.label(
+                            format!(
+                                "Densidad {}",
+                                self.density
+                            )
+                        );
+
+                        ui.add_space(
+                            8.0
+                        );
+
+                        ui.colored_label(
+                            success,
+                            "USB conectado"
+                        );
+                    }
+                );
+
+                ui.add_space(
+                    25.0
+                );
+
+                /*
+                 * Menu.
+                 */
+
+                ui.label(
+                    egui::RichText::new(
+                        "FUNCIONES"
+                    )
+                    .size(12.0)
+                    .strong()
+                    .color(
+                        egui::Color32::GRAY
+                    )
+                );
+
+                ui.add_space(
+                    8.0
+                );
+
+                /*
+                 * Pantalla.
+                 */
+
+                let pantalla =
+                    egui::Button::new(
+                        egui::RichText::new(
+                            "▣   Pantalla"
+                        )
+                        .size(15.0)
+                    )
+                    .min_size(
+                        egui::vec2(
+                            ui.available_width(),
+                            42.0
+                        )
+                    );
+
+                if ui
+                    .add(pantalla)
+                    .clicked()
+                {
+                }
+
+                ui.add_space(
+                    7.0
+                );
+
+                /*
+                 * Control.
+                 */
+
+                let control =
+                    egui::Button::new(
+                        egui::RichText::new(
+                            "⌨   Control"
+                        )
+                        .size(15.0)
+                    )
+                    .min_size(
+                        egui::vec2(
+                            ui.available_width(),
+                            42.0
+                        )
+                    );
+
+                if ui
+                    .add(control)
+                    .clicked()
+                {
+                }
+
+                ui.add_space(
+                    7.0
+                );
+
+                /*
+                 * Archivos.
+                 */
+
+                let archivos =
+                    egui::Button::new(
+                        egui::RichText::new(
+                            "▤   Archivos"
+                        )
+                        .size(15.0)
+                    )
+                    .min_size(
+                        egui::vec2(
+                            ui.available_width(),
+                            42.0
+                        )
+                    );
+
+                if ui
+                    .add(archivos)
+                    .clicked()
+                {
+                }
+
+                /*
+                 * Estado de transmision.
+                 */
+
+                ui.add_space(
+                    25.0
+                );
+
+                egui::Frame::group(
+                    ui.style()
+                )
+                .fill(card)
+                .stroke(
+                    egui::Stroke::new(
+                        1.0,
+                        border
+                    )
+                )
+                .show(
+                    ui,
+                    |ui| {
+
+                        ui.label(
+                            egui::RichText::new(
+                                "TRANSMISION"
+                            )
+                            .size(12.0)
+                            .strong()
+                            .color(
+                                egui::Color32::GRAY
+                            )
+                        );
+
+                        ui.add_space(
+                            8.0
+                        );
+
+                        if self.texture.is_some() {
+
+                            ui.colored_label(
+                                success,
+                                "● Transmision activa"
+                            );
+
+                        } else {
+
+                            ui.label(
+                                "● Inactiva"
+                            );
+                        }
+                    }
+                );
+
+                ui.with_layout(
+                    egui::Layout::bottom_up(
+                        egui::Align::LEFT
+                    ),
+                    |ui| {
+
+                        ui.add_space(
+                            10.0
+                        );
+
+                        ui.label(
+                            egui::RichText::new(
+                                "TransFEL"
+                            )
+                            .size(12.0)
+                            .color(
+                                egui::Color32::GRAY
+                            )
+                        );
+                    }
+                );
+            }
         );
 
         /*
-         * Si existe un dispositivo.
+         * Area principal.
          */
 
-        if self.device.is_some() {
-
-            let available =
-                ui.available_size();
-
-            /*
-             * Panel izquierdo dinamico.
-             */
-
-            let left_width =
-                (
-                    available.x * 0.20
-                )
-                .clamp(
-                    200.0,
-                    280.0
-                );
-
-            let spacing =
-                15.0;
-
-            let right_width =
-                (
-                    available.x
-                    - left_width
-                    - spacing
-                )
-                .max(
-                    300.0
-                );
-
-            /*
-             * Contenedor principal.
-             */
-
-            ui.horizontal(
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(background)
+                    .inner_margin(
+                        egui::Margin::same(
+                            20
+                        )
+                    )
+            )
+            .show(
+                ui,
                 |ui| {
 
                     /*
-                     * PANEL IZQUIERDO
+                     * Encabezado.
                      */
 
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(
-                            left_width,
-                            available.y
-                        ),
-                        egui::Layout::top_down(
-                            egui::Align::LEFT
-                        ),
+                    ui.horizontal(
                         |ui| {
 
-                            ui.group(
-                                |ui| {
-
-                                    ui.heading(
-                                        "Dispositivo"
-                                    );
-
-                                    ui.add_space(
-                                        8.0
-                                    );
-
-                                    ui.label(
-                                        format!(
-                                            "Modelo: {}",
-                                            self.model
-                                        )
-                                    );
-
-                                    ui.label(
-                                        format!(
-                                            "Android: {}",
-                                            self.android
-                                        )
-                                    );
-
-                                    ui.label(
-                                        format!(
-                                            "Resolucion: {}",
-                                            self.resolution
-                                        )
-                                    );
-
-                                    ui.label(
-                                        format!(
-                                            "Densidad: {}",
-                                            self.density
-                                        )
-                                    );
-
-                                    ui.add_space(
-                                        8.0
-                                    );
-
-                                    ui.colored_label(
-                                        egui::Color32::GREEN,
-                                        "Conectado por USB"
-                                    );
-                                }
-                            );
-
-                            ui.add_space(
-                                15.0
-                            );
-
-                            ui.group(
-                                |ui| {
-
-                                    ui.heading(
-                                        "Funciones"
-                                    );
-
-                                    ui.add_space(
-                                        8.0
-                                    );
-
-                                    ui.add_sized(
-                                        [
-                                            left_width - 20.0,
-                                            30.0
-                                        ],
-                                        egui::Button::new(
-                                            "Pantalla"
-                                        )
-                                    );
-
-                                    ui.add_space(
-                                        5.0
-                                    );
-
-                                    ui.add_sized(
-                                        [
-                                            left_width - 20.0,
-                                            30.0
-                                        ],
-                                        egui::Button::new(
-                                            "Control"
-                                        )
-                                    );
-
-                                    ui.add_space(
-                                        5.0
-                                    );
-
-                                    ui.add_sized(
-                                        [
-                                            left_width - 20.0,
-                                            30.0
-                                        ],
-                                        egui::Button::new(
-                                            "Archivos"
-                                        )
-                                    );
-                                }
-                            );
-
-                            ui.add_space(
-                                15.0
-                            );
-
-                            let frames =
-                                *self
-                                    .frames_received
-                                    .lock()
-                                    .unwrap();
-
                             ui.label(
-                                format!(
-                                    "Frames recibidos: {}",
-                                    frames
+                                egui::RichText::new(
+                                    "Pantalla del dispositivo"
                                 )
+                                .size(20.0)
+                                .strong()
+                            );
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(
+                                    egui::Align::Center
+                                ),
+                                |ui| {
+
+                                    if self.texture.is_some() {
+
+                                        ui.colored_label(
+                                            success,
+                                            "● EN VIVO"
+                                        );
+                                    }
+                                }
                             );
                         }
                     );
 
                     ui.add_space(
-                        spacing
+                        12.0
                     );
 
                     /*
-                     * PANEL DERECHO
+                     * Contenedor de video.
                      */
 
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(
-                            right_width,
-                            available.y
-                        ),
-                        egui::Layout::top_down(
-                            egui::Align::Center
-                        ),
+                    egui::Frame::group(
+                        ui.style()
+                    )
+                    .fill(
+                        egui::Color32::from_rgb(
+                            8,
+                            8,
+                            10
+                        )
+                    )
+                    .stroke(
+                        egui::Stroke::new(
+                            1.0,
+                            border
+                        )
+                    )
+                    .show(
+                        ui,
                         |ui| {
 
-                            ui.heading(
-                                "Vista del dispositivo"
-                            );
-
-                            ui.add_space(
-                                8.0
-                            );
-
-                            /*
-                             * Area disponible para
-                             * la pantalla.
-                             */
-
-                            let video_area =
+                            let area =
                                 ui.available_size();
 
-                            egui::Frame::group(
-                                ui.style()
-                            )
-                            .show(
-                                ui,
-                                |ui| {
+                            if let Some(
+                                texture
+                            ) =
+                                &self.texture
+                            {
 
-                                    let area =
-                                        ui.available_size();
+                                let texture_size =
+                                    texture
+                                        .size_vec2();
 
-                                    /*
-                                     * Si tenemos video.
-                                     */
+                                /*
+                                 * Escalado dinamico.
+                                 */
 
-                                    if let Some(
-                                        texture
-                                    ) =
-                                        &self.texture
-                                    {
+                                let scale_x =
+                                    area.x
+                                        / texture_size.x;
 
-                                        let texture_size =
-                                            texture
-                                                .size_vec2();
+                                let scale_y =
+                                    area.y
+                                        / texture_size.y;
 
-                                        /*
-                                         * Calculamos el
-                                         * maximo tamaño
-                                         * posible.
-                                         */
+                                let scale =
+                                    scale_x
+                                        .min(scale_y);
 
-                                        let scale_x =
-                                            area.x
-                                                / texture_size.x;
+                                let display_size =
+                                    texture_size
+                                        * scale;
 
-                                        let scale_y =
-                                            area.y
-                                                / texture_size.y;
+                                /*
+                                 * Centrado vertical.
+                                 */
 
-                                        let scale =
-                                            scale_x
-                                                .min(scale_y);
+                                let top_space =
+                                    (
+                                        area.y
+                                        - display_size.y
+                                    )
+                                    .max(
+                                        0.0
+                                    )
+                                    / 2.0;
 
-                                        let display_size =
-                                            texture_size
-                                                * scale;
+                                ui.add_space(
+                                    top_space
+                                );
 
-                                        /*
-                                         * Centramos
-                                         * verticalmente.
-                                         */
+                                /*
+                                 * Centrado horizontal.
+                                 */
 
-                                        let top_space =
+                                ui.horizontal(
+                                    |ui| {
+
+                                        let left_space =
                                             (
-                                                area.y
-                                                - display_size.y
+                                                area.x
+                                                - display_size.x
                                             )
                                             .max(
                                                 0.0
@@ -945,141 +1236,77 @@ impl eframe::App for TransfelApp {
                                             / 2.0;
 
                                         ui.add_space(
-                                            top_space
+                                            left_space
                                         );
 
-                                        /*
-                                         * Centramos
-                                         * horizontalmente.
-                                         */
-
-                                        ui.horizontal(
-                                            |ui| {
-
-                                                let left_space =
-                                                    (
-                                                        area.x
-                                                        - display_size.x
-                                                    )
-                                                    .max(
-                                                        0.0
-                                                    )
-                                                    / 2.0;
-
-                                                ui.add_space(
-                                                    left_space
-                                                );
-
-                                                ui.image(
-                                                    (
-                                                        texture.id(),
-                                                        display_size,
-                                                    )
-                                                );
-                                            }
-                                        );
-
-                                    } else {
-
-                                        /*
-                                         * No hay video
-                                         * todavia.
-                                         */
-
-                                        ui.set_min_size(
-                                            area
-                                        );
-
-                                        ui.vertical_centered(
-                                            |ui| {
-
-                                                ui.add_space(
-                                                    (
-                                                        area.y
-                                                        / 2.0
-                                                    )
-                                                    .max(
-                                                        0.0
-                                                    )
-                                                );
-
-                                                ui.heading(
-                                                    "Pantalla Android"
-                                                );
-
-                                                let frames =
-                                                    *self
-                                                        .frames_received
-                                                        .lock()
-                                                        .unwrap();
-
-                                                ui.label(
-                                                    format!(
-                                                        "Frames H264 recibidos: {}",
-                                                        frames
-                                                    )
-                                                );
-
-                                                ui.label(
-                                                    "Esperando video..."
-                                                );
-                                            }
+                                        ui.image(
+                                            (
+                                                texture.id(),
+                                                display_size
+                                            )
                                         );
                                     }
-                                }
-                            );
+                                );
 
-                            let _ =
-                                video_area;
+                            } else {
+
+                                /*
+                                 * Estado inicial.
+                                 */
+
+                                ui.set_min_size(
+                                    area
+                                );
+
+                                ui.vertical_centered(
+                                    |ui| {
+
+                                        ui.add_space(
+                                            (
+                                                area.y
+                                                / 2.0
+                                            )
+                                            - 70.0
+                                        );
+
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Pantalla Android"
+                                            )
+                                            .size(24.0)
+                                            .strong()
+                                        );
+
+                                        ui.add_space(
+                                            10.0
+                                        );
+
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Inicia la transmision desde la app movil"
+                                            )
+                                            .size(15.0)
+                                            .color(
+                                                egui::Color32::GRAY
+                                            )
+                                        );
+                                    }
+                                );
+                            }
                         }
                     );
                 }
             );
 
-        } else {
-
-            /*
-             * No hay dispositivo.
-             */
-
-            ui.vertical_centered(
-                |ui| {
-
-                    ui.add_space(
-                        180.0
-                    );
-
-                    ui.heading(
-                        "TransFEL"
-                    );
-
-                    ui.add_space(
-                        15.0
-                    );
-
-                    ui.label(
-                        &self.status
-                    );
-
-                    ui.add_space(
-                        10.0
-                    );
-
-                    ui.label(
-                        "Conecta un Android con depuracion USB activada."
-                    );
-                }
-            );
-        }
-
         /*
-         * Actualizamos la interfaz
-         * aproximadamente a 60 FPS.
+         * Actualizacion fluida.
          */
 
         ui.ctx()
             .request_repaint_after(
-                Duration::from_millis(16)
+                Duration::from_millis(
+                    16
+                )
             );
     }
 }
@@ -1137,22 +1364,11 @@ fn handle_connection(
     let ffmpeg =
         TransfelApp::ffmpeg_path();
 
-    println!(
-        "FFmpeg: {}",
-        ffmpeg.display()
-    );
-
     let width =
         resolution.0;
 
     let height =
         resolution.1;
-
-    println!(
-        "Video: {}x{}",
-        width,
-        height
-    );
 
     let mut child =
         match Command::new(
@@ -1194,7 +1410,7 @@ fn handle_connection(
             Err(error) => {
 
                 println!(
-                    "ERROR FFmpeg: {}",
+                    "Error FFmpeg: {}",
                     error
                 );
 
@@ -1210,11 +1426,6 @@ fn handle_connection(
                 stdin,
 
             None => {
-
-                println!(
-                    "ERROR: no se pudo abrir stdin de FFmpeg"
-                );
-
                 return;
             }
         };
@@ -1227,11 +1438,6 @@ fn handle_connection(
                 stdout,
 
             None => {
-
-                println!(
-                    "ERROR: no se pudo abrir stdout de FFmpeg"
-                );
-
                 return;
             }
         };
@@ -1279,8 +1485,7 @@ fn handle_connection(
     }
 
     /*
-     * Hilo que recibe los frames
-     * convertidos por FFmpeg.
+     * Procesamiento de video.
      */
 
     let output_sender =
@@ -1335,13 +1540,7 @@ fn handle_connection(
                         }
                     }
 
-                    Err(error) => {
-
-                        println!(
-                            "FFmpeg video detenido: {}",
-                            error
-                        );
-
+                    Err(_) => {
                         break;
                     }
                 }
@@ -1350,8 +1549,7 @@ fn handle_connection(
     );
 
     /*
-     * Recibimos los frames H264
-     * desde Android.
+     * Recepcion H264.
      */
 
     loop {
@@ -1365,11 +1563,6 @@ fn handle_connection(
             )
             .is_err()
         {
-
-            println!(
-                "Android desconectado"
-            );
-
             break;
         }
 
@@ -1385,12 +1578,6 @@ fn handle_connection(
         if size >
             20_000_000
         {
-
-            println!(
-                "Frame demasiado grande: {} bytes",
-                size
-            );
-
             break;
         }
 
@@ -1406,56 +1593,24 @@ fn handle_connection(
             )
             .is_err()
         {
-
-            println!(
-                "Error leyendo frame"
-            );
-
             break;
         }
 
-        if let Err(error) =
-            ffmpeg_input.write_all(
+        if ffmpeg_input
+            .write_all(
                 &frame
             )
+            .is_err()
         {
-
-            println!(
-                "ERROR enviando H264 a FFmpeg: {}",
-                error
-            );
-
             break;
         }
 
-        let numero = {
+        let mut counter =
+            frames_received
+                .lock()
+                .unwrap();
 
-            let mut contador =
-                frames_received
-                    .lock()
-                    .unwrap();
-
-            *contador += 1;
-
-            *contador
-        };
-
-        if numero == 1 {
-
-            println!(
-                "PRIMER FRAME H264 RECIBIDO: {} bytes",
-                size
-            );
-        }
-
-        if numero % 30 == 0 {
-
-            println!(
-                "Frames H264 recibidos: {} | ultimo: {} bytes",
-                numero,
-                size
-            );
-        }
+        *counter += 1;
     }
 
     drop(
