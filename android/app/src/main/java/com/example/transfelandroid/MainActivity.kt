@@ -1,10 +1,8 @@
 package com.example.transfelandroid
 
 import android.app.Activity
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -32,25 +30,13 @@ class MainActivity : ComponentActivity() {
         "Esperando..."
     )
 
-    private val estadoReceiver =
-        object : BroadcastReceiver() {
+    private var transmisionPausada by mutableStateOf(
+        false
+    )
 
-            override fun onReceive(
-                context: Context?,
-                intent: Intent?
-            ) {
-
-                val mensaje =
-                    intent?.getStringExtra(
-                        "estado"
-                    )
-
-                if (mensaje != null) {
-
-                    estado = mensaje
-                }
-            }
-        }
+    private var transmisionActiva by mutableStateOf(
+        false
+    )
 
     private val screenCaptureLauncher =
         registerForActivityResult(
@@ -96,18 +82,6 @@ class MainActivity : ComponentActivity() {
                 Context.MEDIA_PROJECTION_SERVICE
             ) as MediaProjectionManager
 
-        val filter =
-            IntentFilter(
-                "com.example.transfelandroid.ESTADO"
-            )
-
-        ContextCompat.registerReceiver(
-            this,
-            estadoReceiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-
         setContent {
 
             Column(
@@ -144,6 +118,77 @@ class MainActivity : ComponentActivity() {
                         text = "Iniciar captura"
                     )
                 }
+
+                Button(
+                    onClick = {
+
+                        transmisionPausada =
+                            !transmisionPausada
+
+                        val intent =
+                            Intent(
+                                "com.example.transfelandroid.PAUSAR"
+                            )
+
+                        intent.setPackage(
+                            packageName
+                        )
+
+                        intent.putExtra(
+                            "pausada",
+                            transmisionPausada
+                        )
+
+                        sendBroadcast(intent)
+
+                        estado =
+                            if (transmisionPausada) {
+                                "TRANSMISION PAUSADA"
+                            } else {
+                                "TRANSMISION REANUDADA"
+                            }
+                    }
+                ) {
+
+                    Text(
+                        text =
+                            if (transmisionPausada) {
+                                "Reanudar transmision"
+                            } else {
+                                "Pausar transmision"
+                            }
+                    )
+                }
+
+                Button(
+                    onClick = {
+
+                        val intent =
+                            Intent(
+                                "com.example.transfelandroid.TERMINAR"
+                            )
+
+                        intent.setPackage(
+                            packageName
+                        )
+
+                        sendBroadcast(intent)
+
+                        transmisionPausada =
+                            false
+
+                        transmisionActiva =
+                            false
+
+                        estado =
+                            "TRANSMISION TERMINADA"
+                    }
+                ) {
+
+                    Text(
+                        text = "Terminar transmision"
+                    )
+                }
             }
         }
     }
@@ -152,6 +197,12 @@ class MainActivity : ComponentActivity() {
 
         estado =
             "Solicitando permiso..."
+
+        transmisionPausada =
+            false
+
+        transmisionActiva =
+            true
 
         val intent =
             projectionManager
@@ -199,15 +250,6 @@ class MainActivity : ComponentActivity() {
             estado =
                 "ERROR SERVICE: ${e.message}"
         }
-    }
-
-    override fun onDestroy() {
-
-        unregisterReceiver(
-            estadoReceiver
-        )
-
-        super.onDestroy()
     }
 }
 

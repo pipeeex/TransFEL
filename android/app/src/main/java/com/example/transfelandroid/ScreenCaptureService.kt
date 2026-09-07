@@ -4,7 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
@@ -31,6 +34,65 @@ class ScreenCaptureService : Service() {
 
     private var running = false
 
+    private var transmisionPausada = false
+
+    private val pauseReceiver =
+        object : BroadcastReceiver() {
+
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?
+            ) {
+
+                if (
+                    intent?.action ==
+                    "com.example.transfelandroid.PAUSAR"
+                ) {
+
+                    transmisionPausada =
+                        intent.getBooleanExtra(
+                            "pausada",
+                            false
+                        )
+
+                    if (transmisionPausada) {
+
+                        enviarEstado(
+                            "TRANSMISION: PAUSADA"
+                        )
+
+                    } else {
+
+                        enviarEstado(
+                            "TRANSMISION: REANUDADA"
+                        )
+                    }
+                }
+            }
+        }
+
+    private val terminarReceiver =
+        object : BroadcastReceiver() {
+
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?
+            ) {
+
+                if (
+                    intent?.action ==
+                    "com.example.transfelandroid.TERMINAR"
+                ) {
+
+                    enviarEstado(
+                        "TERMINANDO TRANSMISION..."
+                    )
+
+                    detenerTransmision()
+                }
+            }
+        }
+
     private val mediaProjectionCallback =
         object : MediaProjection.Callback() {
 
@@ -45,6 +107,7 @@ class ScreenCaptureService : Service() {
                 cerrarConexion()
 
                 virtualDisplay?.release()
+
                 virtualDisplay = null
             }
         }
@@ -54,6 +117,28 @@ class ScreenCaptureService : Service() {
         super.onCreate()
 
         createNotificationChannel()
+
+        val pauseFilter =
+            IntentFilter(
+                "com.example.transfelandroid.PAUSAR"
+            )
+
+        registerReceiver(
+            pauseReceiver,
+            pauseFilter,
+            Context.RECEIVER_NOT_EXPORTED
+        )
+
+        val terminarFilter =
+            IntentFilter(
+                "com.example.transfelandroid.TERMINAR"
+            )
+
+        registerReceiver(
+            terminarReceiver,
+            terminarFilter,
+            Context.RECEIVER_NOT_EXPORTED
+        )
     }
 
     override fun onStartCommand(
@@ -71,7 +156,9 @@ class ScreenCaptureService : Service() {
 
         try {
 
-            if (android.os.Build.VERSION.SDK_INT >= 29) {
+            if (
+                android.os.Build.VERSION.SDK_INT >= 29
+            ) {
 
                 startForeground(
                     1,
@@ -111,7 +198,9 @@ class ScreenCaptureService : Service() {
                 ) ?: -1
 
             val data =
-                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                if (
+                    android.os.Build.VERSION.SDK_INT >= 33
+                ) {
 
                     intent?.getParcelableExtra(
                         "data",
@@ -180,7 +269,7 @@ class ScreenCaptureService : Service() {
                 "ERROR CAPTURA: ${e.message}"
             )
 
-            stopSelf()
+            detenerTransmision()
         }
 
         return START_NOT_STICKY
@@ -275,7 +364,7 @@ class ScreenCaptureService : Service() {
                 "ERROR H264: ${e.message}"
             )
 
-            stopSelf()
+            detenerTransmision()
         }
     }
 
@@ -391,7 +480,10 @@ class ScreenCaptureService : Service() {
                             10000
                         ) ?: -1
 
-                    if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (
+                        index ==
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED
+                    ) {
 
                         val nuevoFormato =
                             encoder?.outputFormat
@@ -432,24 +524,32 @@ class ScreenCaptureService : Service() {
 
                             buffer.get(datos)
 
-                            enviarFrameTCP(
-                                datos
-                            )
+                            if (
+                                !transmisionPausada &&
+                                running
+                            ) {
 
-                            frames++
-
-                            if (frames == 1) {
-
-                                enviarEstado(
-                                    "H264: PRIMER FRAME ENVIADO"
+                                enviarFrameTCP(
+                                    datos
                                 )
-                            }
 
-                            if (frames % 30 == 0) {
+                                frames++
 
-                                enviarEstado(
-                                    "H264: $frames frames enviados"
-                                )
+                                if (frames == 1) {
+
+                                    enviarEstado(
+                                        "H264: PRIMER FRAME ENVIADO"
+                                    )
+                                }
+
+                                if (
+                                    frames % 30 == 0
+                                ) {
+
+                                    enviarEstado(
+                                        "H264: $frames frames enviados"
+                                    )
+                                }
                             }
                         }
 
@@ -462,9 +562,12 @@ class ScreenCaptureService : Service() {
 
             } catch (e: Exception) {
 
-                enviarEstado(
-                    "ERROR CODIFICADOR: ${e.message}"
-                )
+                if (running) {
+
+                    enviarEstado(
+                        "ERROR CODIFICADOR: ${e.message}"
+                    )
+                }
             }
 
         }.start()
@@ -504,7 +607,12 @@ class ScreenCaptureService : Service() {
                     datos
                 )
 
-                salida.flush()
+                /*
+                 * No hacemos flush en cada frame.
+                 *
+                 * Esto reduce carga y mejora
+                 * el rendimiento de la transmision.
+                 */
             }
 
         } catch (e: Exception) {
@@ -521,6 +629,13 @@ class ScreenCaptureService : Service() {
 
         try {
 
+            outputStream?.flush()
+
+        } catch (_: Exception) {
+        }
+
+        try {
+
             outputStream?.close()
 
         } catch (_: Exception) {
@@ -534,7 +649,94 @@ class ScreenCaptureService : Service() {
         }
 
         outputStream = null
+
         socket = null
+    }
+
+    private fun detenerTransmision() {
+
+        if (!running &&
+            mediaProjection == null &&
+            encoder == null &&
+            virtualDisplay == null
+        ) {
+
+            stopSelf()
+
+            return
+        }
+
+        enviarEstado(
+            "DETENIENDO CAPTURA..."
+        )
+
+        running = false
+
+        transmisionPausada = false
+
+        cerrarConexion()
+
+        try {
+
+            virtualDisplay?.release()
+
+        } catch (_: Exception) {
+        }
+
+        virtualDisplay = null
+
+        try {
+
+            encoder?.stop()
+
+        } catch (_: Exception) {
+        }
+
+        try {
+
+            encoder?.release()
+
+        } catch (_: Exception) {
+        }
+
+        encoder = null
+
+        try {
+
+            inputSurface?.release()
+
+        } catch (_: Exception) {
+        }
+
+        inputSurface = null
+
+        try {
+
+            mediaProjection?.unregisterCallback(
+                mediaProjectionCallback
+            )
+
+        } catch (_: Exception) {
+        }
+
+        try {
+
+            mediaProjection?.stop()
+
+        } catch (_: Exception) {
+        }
+
+        mediaProjection = null
+
+        enviarEstado(
+            "TRANSMISION TERMINADA"
+        )
+
+        stopForeground(
+            STOP_FOREGROUND_REMOVE
+        )
+
+        stopSelf()
     }
 
     private fun enviarEstado(
@@ -599,33 +801,75 @@ class ScreenCaptureService : Service() {
 
         running = false
 
-        cerrarConexion()
-
-        virtualDisplay?.release()
-
-        virtualDisplay = null
-
         try {
-            encoder?.stop()
+
+            unregisterReceiver(
+                pauseReceiver
+            )
+
         } catch (_: Exception) {
         }
 
         try {
+
+            unregisterReceiver(
+                terminarReceiver
+            )
+
+        } catch (_: Exception) {
+        }
+
+        cerrarConexion()
+
+        try {
+
+            virtualDisplay?.release()
+
+        } catch (_: Exception) {
+        }
+
+        virtualDisplay = null
+
+        try {
+
+            encoder?.stop()
+
+        } catch (_: Exception) {
+        }
+
+        try {
+
             encoder?.release()
+
         } catch (_: Exception) {
         }
 
         encoder = null
 
-        inputSurface?.release()
+        try {
+
+            inputSurface?.release()
+
+        } catch (_: Exception) {
+        }
 
         inputSurface = null
 
-        mediaProjection?.unregisterCallback(
-            mediaProjectionCallback
-        )
+        try {
 
-        mediaProjection?.stop()
+            mediaProjection?.unregisterCallback(
+                mediaProjectionCallback
+            )
+
+        } catch (_: Exception) {
+        }
+
+        try {
+
+            mediaProjection?.stop()
+
+        } catch (_: Exception) {
+        }
 
         mediaProjection = null
 
