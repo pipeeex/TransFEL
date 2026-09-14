@@ -2,7 +2,7 @@ use crate::adb;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -11,6 +11,7 @@ pub type SharedRes = Arc<Mutex<(usize, usize)>>;
 pub struct StreamServer {
     pub rx: mpsc::Receiver<Vec<u8>>,
     pub frames: Arc<AtomicU64>,
+    pub clients: Arc<AtomicUsize>,
     pub resolution: SharedRes,
 }
 
@@ -23,6 +24,9 @@ impl StreamServer {
         let frames_bg = Arc::clone(&frames);
         let res_bg = Arc::clone(&resolution);
 
+        let clients = Arc::new(AtomicUsize::new(0));
+        let clients_bg = Arc::clone(&clients);
+
         thread::spawn(move || {
             let listener = match TcpListener::bind("127.0.0.1:5000") {
                 Ok(l) => l,
@@ -30,16 +34,23 @@ impl StreamServer {
             };
             println!("TransFEL escuchando en 5000");
 
-            for conn in listener.incoming() {
-                let Ok(stream) = conn else { continue };
-                let res = res_bg.lock().map(|r| *r).unwrap_or((720, 1280));
-                let tx = tx.clone();
-                let frames = Arc::clone(&frames_bg);
-                thread::spawn(move || handle_connection(stream, tx, frames, res));
+          for conn in listener.incoming() {
+              let Ok(stream) = conn else { continue };
+              let res = res_bg.lock().map(|r| *r).unwrap_or((720, 1280));
+              let tx = tx.clone();
+              let frames = Arc::clone(&frames_bg);
+              let clients = Arc::clone(&clients_bg);
+
+              thread::spawn(move || {
+                  clients.fetch_add(1, Ordering::Relaxed);
+                  handle_connection(stream, tx, frames, res);
+                  clients.fetch_sub(1, Ordering::Relaxed);
+                  println!("Conexion cerrada");
+              });
             }
         });
 
-        Self { rx, frames, resolution }
+        Self { rx, frames, clients, resolution }
     }
 
     /// Devuelve solo el frame mas reciente, descartando los atrasados.
@@ -55,6 +66,15 @@ impl StreamServer {
         if let Ok(mut r) = self.resolution.lock() {
             *r = (w, h);
         }
+    }
+
+    pub fn is_live(&self) -> bool {
+     self.clients.load(Ordering::Relaxed) > 0
+    }
+
+    /// Vacia frames viejos para que no reaparezca la ultima imagen.
+    pub fn drain(&self) {
+     while self.rx.try_recv().is_ok() {}
     }
 }
 

@@ -216,13 +216,19 @@ impl FileManager {
 
     pub fn refresh_android(&mut self, serial: &str) {
         self.android_entries.clear();
-        let cmd = format!("ls -la \"{}\"", self.android_path);
+
+        let base = self.android_path.trim_end_matches('/');
+        let cmd = format!("ls -la \"{}/\"", base);
+
         let Some(out) = adb::shell(serial, &cmd) else {
-            self.error = Some("No se pudo listar el dispositivo".into());
+            self.error = Some("No se pudo listar el dispositivo".to_string());
             return;
         };
 
         for line in out.lines() {
+            if line.starts_with("total "){
+                continue;
+            }
             if let Some(entry) = parse_ls_line(line, &self.android_path) {
                 self.android_entries.push(entry);
             }
@@ -306,8 +312,7 @@ impl FileManager {
                     return false;
                 }
                 if e.is_dir {
-                    return self.category == Category::Todos && needle.is_empty()
-                        || self.category == Category::Todos;
+                    return self.category == Category::Todos;
                 }
                 self.category == Category::Todos || e.category == self.category
             })
@@ -359,6 +364,13 @@ impl FileManager {
                 origin: Side::Pc,
                 size,
             });
+        }
+    }
+
+    pub fn go_home(&mut self) {
+        match self.side {
+        Side::Pc => self.pc_path = dirs_home(),
+        Side::Android => self.android_path = "/sdcard".to_string(),
         }
     }
 
@@ -461,14 +473,19 @@ fn parse_ls_line(line: &str, base: &str) -> Option<FileEntry> {
         return None;
     }
 
-    let is_dir = perms.starts_with('d');
-    let size = parts[4].parse::<u64>().unwrap_or(0);
-    let name = parts[7..].join(" ");
 
     // links simbolicos: "nombre -> destino"
-    let name = name.split(" -> ").next().unwrap_or(&name).to_string();
+    let is_link = perms.starts_with('l');
+    let mut is_dir = perms.starts_with('d');
+    let size = parts[4].parse::<u64>().unwrap_or(0);
 
-    if name == "." || name == ".." || name.starts_with('.') {
+    let raw = parts[7..].join(" ");
+    let name = raw.split(" -> ").next().unwrap_or(&raw);;
+
+    let name = name.rsplit('/').next().unwrap_or(name).to_string();
+
+
+    if name.is_empty() || name == "." || name == ".." || name.starts_with('.') {
         return None;
     }
 

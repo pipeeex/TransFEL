@@ -1,4 +1,4 @@
-use crate::device::DeviceInfo;
+﻿use crate::device::DeviceInfo;
 use crate::files::FileManager;
 use crate::stream::StreamServer;
 use crate::ui;
@@ -12,12 +12,20 @@ pub enum Tab {
     Archivos,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StreamState {
+    Inactiva,
+    EnVivo,
+    Cerrada,
+}
+
 pub struct TransfelApp {
     pub device: DeviceInfo,
     pub status: String,
     pub tab: Tab,
 
     pub stream: StreamServer,
+    pub stream_state: StreamState,
     pub texture: Option<egui::TextureHandle>,
 
     pub files: FileManager,
@@ -29,9 +37,10 @@ impl TransfelApp {
 
         let mut app = Self {
             device: DeviceInfo::disconnected(),
-            status: "Buscando dispositivo...".into(),
+            status: "Buscando dispositivo...".to_string(),
             tab: Tab::Pantalla,
             stream: StreamServer::start(720, 1280),
+            stream_state: StreamState::Inactiva,
             texture: None,
             files: FileManager::default(),
         };
@@ -44,10 +53,9 @@ impl TransfelApp {
         match DeviceInfo::detect() {
             Ok(info) => {
                 self.stream.set_resolution(info.width, info.height);
-                self.status = "Dispositivo conectado".into();
+                self.status = "Dispositivo conectado".to_string();
                 self.device = info;
 
-                // refresca el listado del celular si estamos en esa vista
                 if let Some(serial) = self.device.serial.clone() {
                     self.files.refresh_android(&serial);
                 }
@@ -65,9 +73,23 @@ impl TransfelApp {
     }
 
     fn update_video(&mut self, ctx: &egui::Context) {
+        let live = self.stream.is_live();
+
+        if live {
+            self.stream_state = StreamState::EnVivo;
+        } else if self.stream_state == StreamState::EnVivo {
+            // La app del celular cerró la conexión.
+            self.stream_state = StreamState::Cerrada;
+            self.texture = None;
+            self.stream.drain();
+            self.status = "Transmision finalizada".to_string();
+            return;
+        }
+
         let Some(frame) = self.stream.latest_frame() else {
             return;
         };
+
         let (w, h) = (self.device.width, self.device.height);
         if frame.len() != w * h * 4 {
             return;
@@ -76,7 +98,13 @@ impl TransfelApp {
         let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &frame);
         match &mut self.texture {
             Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-            none => *none = Some(ctx.load_texture("android_screen", image, egui::TextureOptions::LINEAR)),
+            none => {
+                *none = Some(ctx.load_texture(
+                    "android_screen",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ))
+            }
         }
     }
 }
@@ -86,7 +114,7 @@ impl eframe::App for TransfelApp {
         let ctx = ui.ctx().clone();
 
         self.update_video(&ctx);
-        let transfers_changed = self.files.poll();
+        let _ = self.files.poll();
 
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, crate::theme::BACKGROUND);
@@ -106,10 +134,11 @@ impl eframe::App for TransfelApp {
                 Tab::Archivos => ui::files_view::show(self, ui),
             });
 
-        // Solo repinta rapido cuando hace falta (ahorra CPU/bateria).
-        let busy = self.texture.is_some() || self.files.active_transfers() > 0 || transfers_changed;
-        if busy {
+        // En vivo → 60 fps. Si no, tick lento que igual detecta desconexiones.
+        if self.stream_state == StreamState::EnVivo || self.files.active_transfers() > 0 {
             ctx.request_repaint_after(Duration::from_millis(16));
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 }

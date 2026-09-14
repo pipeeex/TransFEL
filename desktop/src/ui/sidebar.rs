@@ -1,4 +1,4 @@
-﻿use crate::app::{Tab, TransfelApp};
+﻿use crate::app::{StreamState, Tab, TransfelApp};
 use crate::theme;
 use crate::ui::{card, section_label};
 use eframe::egui;
@@ -45,11 +45,12 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
             card(ui).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 section_label(ui, "TRANSMISION");
-                if app.texture.is_some() {
-                    ui.colored_label(theme::SUCCESS, "● Transmision activa");
-                } else {
-                    ui.colored_label(theme::MUTED, "● Inactiva");
-                }
+
+                match app.stream_state {
+                    StreamState::EnVivo => ui.colored_label(theme::SUCCESS, "● Transmision activa"),
+                    StreamState::Cerrada => ui.colored_label(theme::DANGER, "● Conexion cerrada"),
+                    StreamState::Inactiva => ui.colored_label(theme::MUTED, "● Inactiva"),
+                };
 
                 let pending = app.files.active_transfers();
                 if pending > 0 {

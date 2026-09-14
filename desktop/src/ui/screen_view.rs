@@ -1,4 +1,4 @@
-﻿use crate::app::TransfelApp;
+﻿use crate::app::{StreamState, TransfelApp};
 use crate::theme;
 use eframe::egui;
 
@@ -6,8 +6,10 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Pantalla del dispositivo").size(20.0).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if app.texture.is_some() {
-                ui.colored_label(theme::SUCCESS, "● EN VIVO");
+            match app.stream_state {
+                StreamState::EnVivo => { ui.colored_label(theme::SUCCESS, "● EN VIVO"); }
+                StreamState::Cerrada => { ui.colored_label(theme::DANGER, "● DESCONECTADO"); }
+                StreamState::Inactiva => {}
             }
         });
     });
@@ -22,15 +24,33 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
 
             let Some(texture) = &app.texture else {
                 ui.set_min_size(area);
-                ui.vertical_centered(|ui| {
-                    ui.add_space((area.y / 2.0 - 70.0).max(0.0));
-                    ui.label(egui::RichText::new("Pantalla Android").size(24.0).strong());
+                
+                let(titulo, sub, color) = match app.stream_state {
+                    StreamState::Cerrada => (
+                        "Conexion cerrada",
+                        "Se finalizo la trasmicion desde la app",
+                        theme::DANGER,
+                    ),
+                    _ => (
+                        "Pantalla android",
+                        "Inicia Transmicion",
+                        theme:: MUTED,
+                    ),
+                };
+
+                ui.vertical_centered(|ui|{
+                    ui.add_space((area.y / 2.0 - 80.0).max(0.0));
+                    ui.label(egui::RichText::new(if app.stream_state == StreamState::Cerrada { "⛌" } else { "▣" }).size(42.0).color(color));
+                    ui.label(egui::RichText::new(titulo).size(24.0).strong().color(color));
                     ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new("Inicia la transmision desde la app movil")
-                            .size(15.0)
-                            .color(theme::MUTED),
-                    );
+                    ui.label(egui::RichText::new(sub).size(15.0).color(theme::MUTED));
+
+                    if app.stream_state == StreamState::Cerrada {
+                        ui.add_space(16.0);
+                        if ui.button("Esperar nueva conexion").clicked(){
+                            app.stream_state = StreamState::Inactiva;
+                        }
+                    }
                 });
                 return;
             };
