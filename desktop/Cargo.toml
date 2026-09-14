@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 eframe = "0.36.1"
+rfd    = "0.15"   # selector de archivos nativo del PC
 
