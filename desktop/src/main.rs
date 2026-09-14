@@ -5,6 +5,7 @@ mod files;
 mod stream;
 mod theme;
 mod ui;
+mod watcher;
 
 use app::TransfelApp;
 use eframe::egui;

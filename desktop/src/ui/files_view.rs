@@ -1,5 +1,7 @@
 ﻿use crate::app::TransfelApp;
-use crate::files::{human_size, Category, Side, TransferState};
+use crate::files::{
+    human_size, Category, Scope, Side, TransferState, ANDROID_SHORTCUTS, PC_SHORTCUTS,
+};
 use crate::theme;
 use crate::ui::{card, section_label};
 use eframe::egui;
@@ -10,19 +12,21 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
     header(app, ui);
     ui.add_space(10.0);
     search_bar(app, ui);
+    ui.add_space(6.0);
+    shortcuts(app, ui);
     ui.add_space(8.0);
+    category_chips(app, ui);
+    ui.add_space(6.0);
     path_bar(app, ui);
     ui.add_space(6.0);
     ui.separator();
     ui.add_space(8.0);
 
-    // ── Cuerpo: lista (izq) + bandeja (der) ──
     let avail = ui.available_size();
     let list_w = (avail.x - BANDEJA_W - 16.0).max(280.0);
     let body_h = avail.y.max(200.0);
 
     ui.horizontal_top(|ui| {
-        // IMPORTANTE: layout top_down explícito, si no hereda el horizontal.
         ui.allocate_ui_with_layout(
             egui::vec2(list_w, body_h),
             egui::Layout::top_down(egui::Align::Min),
@@ -58,10 +62,17 @@ fn header(app: &mut TransfelApp, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         side_tab(ui, app, Side::Android, "📱  Celular");
 
+        if app.files.loading {
+            ui.add_space(10.0);
+            ui.spinner();
+            ui.colored_label(theme::MUTED, "Cargando...");
+        }
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("⟳  Actualizar").clicked() {
+            if ui.button("⟳").on_hover_text("Actualizar").clicked() {
                 let serial = app.device.serial.clone();
-                app.files.refresh_current(serial.as_deref());
+                app.files.invalidate();
+                app.files.reload(serial.as_deref());
             }
             if ui.button("➕  Agregar del PC").clicked() {
                 app.files.stage_from_dialog();
@@ -74,59 +85,115 @@ fn side_tab(ui: &mut egui::Ui, app: &mut TransfelApp, side: Side, label: &str) {
     let selected = app.files.side == side;
     let button = egui::Button::new(egui::RichText::new(label).size(14.0))
         .fill(if selected { theme::ACCENT } else { theme::CARD })
-        .min_size(egui::vec2(120.0, 32.0));
+        .min_size(egui::vec2(118.0, 32.0));
 
-    if ui.add(button).clicked() && !selected {
-        app.files.side = side;
+    if ui.add(button).clicked() {
         let serial = app.device.serial.clone();
-        app.files.refresh_current(serial.as_deref());
+        app.files.switch_side(side, serial.as_deref());
     }
 }
 
+// ─────────────────────────── Buscador + ámbito ───────────────────────────
+
 fn search_bar(app: &mut TransfelApp, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.label("🔍");
-        ui.add(
+
+        let response = ui.add(
             egui::TextEdit::singleline(&mut app.files.search)
                 .hint_text("Buscar por nombre...")
-                .desired_width(260.0),
+                .desired_width(280.0),
         );
-        if !app.files.search.is_empty() && ui.small_button("✕").clicked() {
-            app.files.search.clear();
+        if response.changed() {
+            app.files.on_search_changed();
         }
 
-        ui.add_space(12.0);
+        if !app.files.search.is_empty() && ui.small_button("✕").clicked() {
+            app.files.search.clear();
+            app.files.on_search_changed();
+        }
 
+        ui.add_space(14.0);
+
+        // Ámbito de la búsqueda
+        let serial = app.device.serial.clone();
+        for (scope, label) in [
+            (Scope::Carpeta, "Esta carpeta"),
+            (Scope::Dispositivo, "Todo el dispositivo"),
+        ] {
+            let selected = app.files.scope == scope;
+            let b = egui::Button::new(egui::RichText::new(label).size(12.0))
+                .fill(if selected { theme::ACCENT } else { theme::CARD })
+                .corner_radius(12.0);
+            if ui.add(b).clicked() {
+                app.files.set_scope(scope, serial.as_deref());
+            }
+        }
+    });
+}
+
+// ─────────────────────────── Accesos rápidos ───────────────────────────
+
+fn shortcuts(app: &mut TransfelApp, ui: &mut egui::Ui) {
+    let serial = app.device.serial.clone();
+    let list: &[crate::files::Shortcut] = match app.files.side {
+        Side::Pc => &PC_SHORTCUTS,
+        Side::Android => &ANDROID_SHORTCUTS,
+    };
+
+    ui.horizontal_wrapped(|ui| {
+        for sc in list {
+            let b = egui::Button::new(
+                egui::RichText::new(format!("{}  {}", sc.icon, sc.label)).size(13.0),
+            )
+            .fill(theme::CARD)
+            .corner_radius(10.0);
+
+            if ui.add(b).clicked() {
+                app.files.open_shortcut(sc, serial.as_deref());
+            }
+        }
+    });
+}
+
+fn category_chips(app: &mut TransfelApp, ui: &mut egui::Ui) {
+    let serial = app.device.serial.clone();
+
+    ui.horizontal_wrapped(|ui| {
+        ui.colored_label(theme::MUTED, "Filtrar:");
         for cat in Category::ALL {
             let selected = app.files.category == cat;
-            let button = egui::Button::new(
+            let b = egui::Button::new(
                 egui::RichText::new(format!("{}  {}", cat.icon(), cat.label())).size(13.0),
             )
             .fill(if selected { theme::ACCENT } else { theme::CARD })
             .corner_radius(14.0);
 
-            if ui.add(button).clicked() {
+            if ui.add(b).clicked() && !selected {
                 app.files.category = cat;
+                // Si estamos en búsqueda global, el filtro cambia la consulta.
+                if app.files.scope == Scope::Dispositivo {
+                    app.files.on_search_changed();
+                }
+                let _ = &serial;
             }
         }
     });
 }
 
 fn path_bar(app: &mut TransfelApp, ui: &mut egui::Ui) {
+    let serial = app.device.serial.clone();
+
     ui.horizontal(|ui| {
         if ui.small_button("⬆  Subir").clicked() {
-            let serial = app.device.serial.clone();
             app.files.go_up(serial.as_deref());
         }
-
         let home = match app.files.side {
             Side::Pc => "🏠  Inicio",
             Side::Android => "🏠  /sdcard",
         };
         if ui.small_button(home).clicked() {
-            app.files.go_home();
-            let serial = app.device.serial.clone();
-            app.files.refresh_current(serial.as_deref());
+            app.files.go_home(serial.as_deref());
         }
 
         ui.add_space(8.0);
@@ -155,7 +222,7 @@ fn file_list(app: &mut TransfelApp, ui: &mut egui::Ui) {
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("Sin dispositivo conectado").size(16.0).strong());
                 ui.add_space(6.0);
-                ui.colored_label(theme::MUTED, "Conecta por USB o vincula por WiFi");
+                ui.colored_label(theme::MUTED, "Se detectará automáticamente al conectarlo");
             });
             ui.add_space(40.0);
         });
@@ -167,22 +234,35 @@ fn file_list(app: &mut TransfelApp, ui: &mut egui::Ui) {
     if visible.is_empty() {
         ui.add_space(30.0);
         ui.vertical_centered(|ui| {
-            ui.colored_label(theme::MUTED, "No hay archivos que coincidan");
+            if app.files.loading {
+                ui.spinner();
+            } else {
+                ui.colored_label(theme::MUTED, "No hay archivos que coincidan");
+            }
         });
         return;
     }
+
+    ui.horizontal(|ui| {
+        ui.colored_label(theme::MUTED, format!("{} elemento(s)", visible.len()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("Cargar todos").clicked() {
+                app.files.stage_all_visible();
+            }
+        });
+    });
+    ui.add_space(4.0);
 
     let row_w = ui.available_width();
 
     egui::ScrollArea::vertical()
         .id_salt("file_list")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // Forzamos layout vertical dentro del scroll.
+        .show_rows(ui, 56.0, visible.len(), |ui, range| {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(row_w);
 
-                for entry in &visible {
+                for entry in &visible[range] {
                     let staged = app.files.is_staged(&entry.path);
 
                     card(ui)
@@ -193,7 +273,6 @@ fn file_list(app: &mut TransfelApp, ui: &mut egui::Ui) {
                                 ui.label(egui::RichText::new(entry.icon()).size(18.0));
                                 ui.add_space(6.0);
 
-                                // Botones a la derecha primero, el nombre ocupa el resto.
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -221,7 +300,10 @@ fn file_list(app: &mut TransfelApp, ui: &mut egui::Ui) {
                                                     )
                                                     .truncate(),
                                                 );
-                                                ui.colored_label(theme::MUTED, entry.size_label());
+                                                ui.colored_label(
+                                                    theme::MUTED,
+                                                    entry.size_label(),
+                                                );
                                             },
                                         );
                                     },
@@ -280,8 +362,12 @@ fn staging_panel(app: &mut TransfelApp, ui: &mut egui::Ui) {
                                                 ui.colored_label(
                                                     theme::MUTED,
                                                     format!(
-                                                        "{} · desde {}",
-                                                        human_size(file.size),
+                                                        "{} · {}",
+                                                        if file.size > 0 {
+                                                            human_size(file.size)
+                                                        } else {
+                                                            "—".to_string()
+                                                        },
                                                         match file.origin {
                                                             Side::Pc => "PC",
                                                             Side::Android => "Celular",

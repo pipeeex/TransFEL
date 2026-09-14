@@ -1,14 +1,15 @@
-﻿use crate::device::DeviceInfo;
+﻿use crate::device::{self, DeviceInfo};
+use crate::watcher::{self, DeviceEvent};
 use crate::files::FileManager;
 use crate::stream::StreamServer;
 use crate::ui;
 use eframe::egui;
 use std::time::Duration;
+use std::sync::mpsc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Pantalla,
-    Control,
     Archivos,
 }
 
@@ -23,6 +24,10 @@ pub struct TransfelApp {
     pub device: DeviceInfo,
     pub status: String,
     pub tab: Tab,
+    pub device_events: mpsc::Receiver<DeviceEvent>,
+
+    info_tx: mpsc::Sender<Result<DeviceInfo, String>>,
+    info_rx: mpsc::Receiver<Result<DeviceInfo, String>>,
 
     pub stream: StreamServer,
     pub stream_state: StreamState,
@@ -34,8 +39,9 @@ pub struct TransfelApp {
 impl TransfelApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        let (info_tx, info_rx) = mpsc::channel();
 
-        let mut app = Self {
+        let app = Self {
             device: DeviceInfo::disconnected(),
             status: "Buscando dispositivo...".to_string(),
             tab: Tab::Pantalla,
@@ -43,27 +49,54 @@ impl TransfelApp {
             stream_state: StreamState::Inactiva,
             texture: None,
             files: FileManager::default(),
+            device_events: watcher::spawn(),
+            info_tx,
+            info_rx,
         };
 
-        app.detect_device();
         app
     }
 
     pub fn detect_device(&mut self) {
-        match DeviceInfo::detect() {
-            Ok(info) => {
-                self.stream.set_resolution(info.width, info.height);
-                self.status = "Dispositivo conectado".to_string();
-                self.device = info;
+        self.status = "Buscando dispositivo...".to_string();
+        device::detect_async(self.info_tx.clone());
+    }
 
-                if let Some(serial) = self.device.serial.clone() {
-                    self.files.refresh_android(&serial);
+    fn poll_device(&mut self) {
+        while let Ok(event) = self.device_events.try_recv() {
+            match event {
+                DeviceEvent::Connected(serial) => {
+                    self.status = "Dispositivo detectado".to_string();
+                    device::info_async(serial, self.info_tx.clone());
+                }
+                DeviceEvent::Disconnected => {
+                    self.device = DeviceInfo::disconnected();
+                    self.texture = None;
+                    self.status = "Dispositivo desconectado".to_string();
+                    self.files.invalidate();
+                    if self.files.side == crate::files::Side::Android {
+                        self.files.entries.clear();
+                    }
                 }
             }
-            Err(msg) => {
-                self.device = DeviceInfo::disconnected();
-                self.texture = None;
-                self.status = msg;
+        }
+
+        while let Ok(result) = self.info_rx.try_recv() {
+            match result {
+                Ok(info) => {
+                    self.stream.set_resolution(info.width, info.height);
+                    self.status = "Dispositivo conectado".to_string();
+                    let serial = info.serial.clone();
+                    self.device = info;
+                    self.files.invalidate();
+                    if self.files.side == crate::files::Side::Android {
+                        self.files.reload(serial.as_deref());
+                    }
+                }
+                Err(msg) => {
+                    self.device = DeviceInfo::disconnected();
+                    self.status = msg;
+                }
             }
         }
     }
@@ -78,7 +111,7 @@ impl TransfelApp {
         if live {
             self.stream_state = StreamState::EnVivo;
         } else if self.stream_state == StreamState::EnVivo {
-            // La app del celular cerró la conexión.
+            // La app del celular cerro la conexión.
             self.stream_state = StreamState::Cerrada;
             self.texture = None;
             self.stream.drain();
@@ -114,7 +147,11 @@ impl eframe::App for TransfelApp {
         let ctx = ui.ctx().clone();
 
         self.update_video(&ctx);
-        let _ = self.files.poll();
+
+        self.poll_device();
+        let serial = self.device.serial.clone();
+        self.files.poll(serial.as_deref());
+
 
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, crate::theme::BACKGROUND);
@@ -130,12 +167,11 @@ impl eframe::App for TransfelApp {
             )
             .show(ui, |ui| match self.tab {
                 Tab::Pantalla => ui::screen_view::show(self, ui),
-                Tab::Control => ui::screen_view::show_control_placeholder(ui),
                 Tab::Archivos => ui::files_view::show(self, ui),
             });
 
-        // En vivo → 60 fps. Si no, tick lento que igual detecta desconexiones.
-        if self.stream_state == StreamState::EnVivo || self.files.active_transfers() > 0 {
+        // En vivo  60 fps. Si no, tick lento que igual detecta desconexiones.
+        if self.stream_state == StreamState::EnVivo || self.files.active_transfers() > 0 || self.files.loading {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else {
             ctx.request_repaint_after(Duration::from_millis(250));

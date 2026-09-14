@@ -35,8 +35,7 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
             section_label(ui, "FUNCIONES");
 
             nav_button(ui, app, Tab::Pantalla, "▣   Pantalla");
-            ui.add_space(7.0);
-            nav_button(ui, app, Tab::Control, "⌨   Control");
+
             ui.add_space(7.0);
             nav_button(ui, app, Tab::Archivos, "▤   Archivos");
 
@@ -61,7 +60,14 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 ui.add_space(10.0);
-                ui.label(egui::RichText::new("TransFEL").size(12.0).color(theme::MUTED));
+                ui.label(egui::RichText::new("TransFEL - Developed by Villaquiran").size(12.0).color(theme::MUTED));
+                ui.add_space(10.0);
+                ui.hyperlink_to(
+                    egui::RichText::new("⭐ GitHub")
+                    .size(12.0)
+                    .color(theme::MUTED),
+                    "https://github.com/pipeeex/TransFEL"
+                )
             });
         });
 }

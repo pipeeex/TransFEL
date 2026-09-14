@@ -1,4 +1,6 @@
 use crate::adb;
+use std::sync::mpsc::Sender;
+use std::thread;
 
 #[derive(Clone)]
 pub struct DeviceInfo {
@@ -90,4 +92,40 @@ pub fn parse_resolution(s: &str) -> Option<(usize, usize)> {
     let width = w.trim().parse::<usize>().ok()?;
     let height = h.trim().parse::<usize>().ok()?;
     Some((width, height))
+}
+
+
+// (no congela la UI).
+pub fn detect_async(tx: Sender<Result<DeviceInfo, String>>) {
+    thread::spawn(move || {
+        let _ = tx.send(DeviceInfo::detect());
+    });
+}
+
+///  (evita re-listar dispositivos).
+pub fn info_async(serial: String, tx: Sender<Result<DeviceInfo, String>>) {
+    thread::spawn(move || {
+        let mut info = DeviceInfo::disconnected();
+        info.serial = Some(serial.clone());
+
+        if let Some(v) = adb::getprop(&serial, "ro.product.model") {
+            info.model = v;
+        }
+        if let Some(v) = adb::getprop(&serial, "ro.build.version.release") {
+            info.android = v;
+        }
+        if let Some(v) = adb::shell(&serial, "wm size") {
+            info.resolution = v.replace("Physical size:", "").trim().to_string();
+            if let Some((w, h)) = parse_resolution(&info.resolution) {
+                info.width = w;
+                info.height = h;
+            }
+        }
+        if let Some(v) = adb::shell(&serial, "wm density") {
+            info.density = v.replace("Physical density:", "").trim().to_string();
+        }
+
+        setup_reverse(&serial);
+        let _ = tx.send(Ok(info));
+    });
 }
