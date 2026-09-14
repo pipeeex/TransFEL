@@ -95,7 +95,7 @@ instant even on devices with tens of thousands of photos.
 ### 1. Install the desktop application
 
 Download `TransFEL-Setup.exe` from the
-[Releases](https://github.com/YOUR_USERNAME/TransFEL/releases) page and run it.
+[Releases](https://github.com/pipeeex/TransFEL/releases) page and run it.
 
 The installer bundles ADB and FFmpeg locally inside the application folder. Nothing is
 added to the system `PATH` and no existing ADB or FFmpeg installation is modified.
