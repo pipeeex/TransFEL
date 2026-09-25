@@ -80,6 +80,53 @@ impl Category {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AndroidDest {
+    Descargas,
+    Camara,
+    Documentos,
+    Musica,
+    Videos,
+    Actual,
+}
+
+impl AndroidDest {
+    pub const ALL: [AndroidDest; 6] = [
+        AndroidDest::Descargas,
+        AndroidDest::Camara,
+        AndroidDest::Documentos,
+        AndroidDest::Musica,
+        AndroidDest::Videos,
+        AndroidDest::Actual,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AndroidDest::Descargas => "⬇  Descargas",
+            AndroidDest::Camara => "📷  Cámara (DCIM)",
+            AndroidDest::Documentos => "📄  Documentos",
+            AndroidDest::Musica => "🎵  Música",
+            AndroidDest::Videos => "🎬  Películas",
+            AndroidDest::Actual => "📂  Carpeta abierta",
+        }
+    }
+
+    pub fn path(self) -> &'static str {
+        match self {
+            AndroidDest::Descargas => "/sdcard/Download",
+            AndroidDest::Camara => "/sdcard/DCIM/Camera",
+            AndroidDest::Documentos => "/sdcard/Documents",
+            AndroidDest::Musica => "/sdcard/Music",
+            AndroidDest::Videos => "/sdcard/Movies",
+            AndroidDest::Actual => "",
+        }
+    }
+}
+
+pub fn default_pc_dest() -> PathBuf {
+    home_dir().join("Downloads").join("TransFEL")
+}
+
 pub fn category_of(name: &str) -> Category {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match ext.as_deref() {
@@ -235,6 +282,10 @@ pub struct FileManager {
     pub pc_path: PathBuf,
     pub android_path: String,
 
+    pub pc_dest: PathBuf,
+    pub android_dest: AndroidDest,
+    pub notice: Option<String>,
+
     pub entries: Vec<FileEntry>,
     pub loading: bool,
     pub result_label: Option<String>,
@@ -263,6 +314,9 @@ impl Default for FileManager {
             search: String::new(),
             pc_path: home_dir(),
             android_path: "/sdcard".to_string(),
+            pc_dest: default_pc_dest(),
+            android_dest: AndroidDest::Descargas,
+            notice: None,
             entries: Vec::new(),
             loading: false,
             result_label: None,
@@ -503,6 +557,32 @@ impl FileManager {
     }
 
     // ── Bandeja ─────────────────────────────────────────────────────
+    pub fn tray_origin(&self) -> Option<Side> {
+        self.staged.first().map(|f| f.origin)
+    }
+
+    pub fn clear_tray(&mut self) {
+        self.staged.clear();
+        self.notice = None;
+    }
+
+    /// Lado al que irán los archivos de la bandeja.
+    pub fn tray_destination(&self) -> Option<Side> {
+        match self.tray_origin()? {
+            Side::Pc => Some(Side::Android),
+            Side::Android => Some(Side::Pc),
+        }
+    }
+
+    pub fn transfer_label(&self) -> String {
+        let n = self.staged.len();
+        match self.tray_origin() {
+            Some(Side::Android) => format!("⬅   Traer {n} al PC"),
+            Some(Side::Pc) => format!("➡   Enviar {n} al celular"),
+            None => "Selecciona archivos".to_string(),
+        }
+    }
+
 
     pub fn is_staged(&self, path: &str) -> bool {
         self.staged.iter().any(|s| s.path == path)
@@ -512,6 +592,17 @@ impl FileManager {
         if entry.is_dir || self.is_staged(&entry.path) {
             return;
         }
+
+        if let Some(origin) = self.tray_origin() {
+            if origin != self.side {
+                self.notice = Some(
+                    "La bandeja ya tiene archivos del otro dispositivo. Transfierelos o vaciala primero.".to_string(),
+                );
+                return;
+            }
+        }
+
+        self.notice = None;
         self.staged.push(StagedFile {
             name: entry.name.clone(),
             path: entry.path.clone(),
@@ -533,9 +624,18 @@ impl FileManager {
     }
 
     pub fn stage_from_dialog(&mut self) {
+        if self.tray_origin() == Some(Side::Android) {
+            self.notice = Some(
+                "La bandeja tiene archivos del celular. Vacíala para cargar desde el PC.".to_string(),
+            );
+            return;
+        }
+
         let Some(paths) = rfd::FileDialog::new().pick_files() else {
             return;
         };
+
+        self.notice = None;
         for path in paths {
             let name = path
                 .file_name()
@@ -556,10 +656,46 @@ impl FileManager {
         }
     }
 
+    pub fn pick_pc_dest(&mut self) {
+        if let Some(dir) = rfd::FileDialog::new()
+            .set_directory(&self.pc_dest)
+            .pick_folder()
+        {
+            self.pc_dest = dir;
+        }
+    }
+
+    /// Cuántos elementos se ocultan por los filtros activos.
+    pub fn filter_summary(&self) -> (usize, usize) {
+        (self.visible().len(), self.entries.len())
+    }
+
+    pub fn filters_active(&self) -> bool {
+        self.category != Category::Todos || !self.search.trim().is_empty()
+    }
+
+    pub fn clear_filters(&mut self, serial: Option<&str>) {
+        self.category = Category::Todos;
+        self.search.clear();
+        if self.scope == Scope::Dispositivo {
+            self.set_scope(Scope::Carpeta, serial);
+        }
+    }
+
+
     // ── Transferencias ──────────────────────────────────────────────
 
-    pub fn transfer_staged(&mut self, serial: &str, android_dest: &str, pc_dest: &PathBuf) {
+    pub fn transfer_staged(&mut self, serial: &str) {
         let staged = std::mem::take(&mut self.staged);
+        self.notice = None;
+
+        let android_dest = match self.android_dest {
+            AndroidDest::Actual => self.android_path.trim_end_matches('/').to_string(),
+            other => other.path().to_string(),
+        };
+
+        let pc_dest = self.pc_dest.clone();
+        let _ = std::fs::create_dir_all(&pc_dest);
 
         for file in staged {
             let index = self.transfers.len();
@@ -579,7 +715,7 @@ impl FileManager {
                     index,
                     serial: serial.to_string(),
                     src: file.path.clone(),
-                    dst: android_dest.trim_end_matches('/').to_string(),
+                    dst: android_dest.clone(),
                 },
                 Side::Pc => Job::Pull {
                     index,
