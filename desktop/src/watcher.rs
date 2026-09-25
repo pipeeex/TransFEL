@@ -1,23 +1,46 @@
-use crate::adb;
+﻿use crate::adb;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
-pub enum DeviceEvent {
-    Connected(String),
-    Disconnected,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceSummary {
+    pub serial: String,
+    pub state: String, 
+    pub Wifi: bool, 
 }
 
+
+
+impl DeviceSummary {
+    pub fn ready(&self) -> bool {
+        self.state == "device"
+    }
+
+    pub fn label(&self) -> String {
+        if self.Wifi {
+            format!("📶  {}", self.serial)
+        }else {
+            format!("🔌  {}", self.serial)
+        }
+    }
+}
+
+
+#[derive(Debug, Clone)]
+pub enum DeviceEvent{
+    Devices(Vec<DeviceSummary>),
+}
+
+
 /// Escucha el servidor ADB y avisa en cuanto entra o sale un dispositivo.
-/// Usa `host:track-devices` (push, sin polling). Si falla, cae a sondeo lento.
 pub fn spawn() -> mpsc::Receiver<DeviceEvent> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut last: Option<String> = None;
+        let mut last: Vec<DeviceSummary> = Vec::new();
 
         loop {
             // Asegura que el servidor ADB este vivo.
@@ -42,9 +65,10 @@ pub fn spawn() -> mpsc::Receiver<DeviceEvent> {
 fn track(
     mut stream: TcpStream,
     tx: &mpsc::Sender<DeviceEvent>,
-    last: &mut Option<String>,
+    last: &mut Vec<DeviceSummary>, 
 ) -> std::io::Result<()> {
     // Protocolo ADB: longitud en 4 dgitos hex + payload.
+
     let msg = "host:track-devices";
     stream.write_all(format!("{:04x}{}", msg.len(), msg).as_bytes())?;
     stream.flush()?;
@@ -75,40 +99,36 @@ fn track(
     }
 }
 
-fn poll_once(tx: &mpsc::Sender<DeviceEvent>, last: &mut Option<String>) {
+fn poll_once(tx: &mpsc::Sender<DeviceEvent>, last: &mut Vec<DeviceSummary>) {
     let text = adb::run(&["devices"]).unwrap_or_default();
     // `adb devices` trae cabecera; la quitamos para reusar el mismo parser.
     let body: String = text.lines().skip(1).collect::<Vec<_>>().join("\n");
     emit(&body, tx, last);
 }
 
-fn emit(text: &str, tx: &mpsc::Sender<DeviceEvent>, last: &mut Option<String>) {
-    let current = text
+fn emit(text: &str, tx: &mpsc::Sender<DeviceEvent>, last: &mut Vec<DeviceSummary>) {
+    let current: Vec<DeviceSummary> = text
         .lines()
         .filter_map(|line| {
             let mut p = line.split_whitespace();
-            let serial = p.next()?;
-            let state = p.next()?;
-            if state == "device" {
-                Some(serial.to_string())
-            } else {
-                None
+            let serial = p.next()?.to_string();
+            let state = p.next()?.to_string();
+
+            if serial.is_empty(){
+                return None; 
             }
+            Some(DeviceSummary {
+                Wifi: serial.contains(':'),
+                serial,
+                state,
+            })
         })
-        .next();
+        .collect();
 
     if current == *last {
         return;
     }
 
-    match &current {
-        Some(serial) => {
-            let _ = tx.send(DeviceEvent::Connected(serial.clone()));
-        }
-        None => {
-            let _ = tx.send(DeviceEvent::Disconnected);
-        }
-    }
-
+    let _ = tx.send(DeviceEvent::Devices(current.clone()));
     *last = current;
 }

@@ -6,6 +6,7 @@ mod stream;
 mod theme;
 mod ui;
 mod watcher;
+mod wifi; 
 
 use app::TransfelApp;
 use eframe::egui;

@@ -2,6 +2,7 @@ pub mod files_view;
 pub mod screen_view;
 pub mod sidebar;
 pub mod top_bar;
+pub mod wifi_view;
 
 use crate::theme;
 use eframe::egui;

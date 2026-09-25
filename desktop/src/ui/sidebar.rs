@@ -25,7 +25,11 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
                 ui.label(format!("Densidad {}", app.device.density));
                 ui.add_space(8.0);
                 if app.device.is_connected() {
-                    ui.colored_label(theme::SUCCESS, "USB conectado");
+                   if app.is_wifi(){
+                       ui.colored_label(theme::ACCENT, "📶 WiFi");
+                   }else {
+                       ui.colored_label(theme::SUCCESS, "🔌 USB");
+                   }
                 } else {
                     ui.colored_label(theme::DANGER, "Desconectado");
                 }
@@ -38,6 +42,9 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
 
             ui.add_space(7.0);
             nav_button(ui, app, Tab::Archivos, "▤   Archivos");
+
+            ui.add_space(7.0);
+            nav_button(ui, app, Tab::Conexion, "📶   Conexion");
 
             ui.add_space(25.0);
 
