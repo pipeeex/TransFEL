@@ -1,0 +1,16 @@
+Android Debug Bridge (adb)
+==========================
+
+TransFEL bundles adb.exe and its companion DLLs from the Android SDK
+Platform-Tools, distributed by Google.
+
+Version:     1.0.41
+Source:      https://developer.android.com/tools/releases/platform-tools
+License:     Android Software Development Kit License Agreement
+             https://developer.android.com/studio/terms
+
+The adb source code is part of the Android Open Source Project and is licensed
+under the Apache License 2.0:
+             https://android.googlesource.com/platform/packages/modules/adb/
+
+These binaries are redistributed unmodified.
