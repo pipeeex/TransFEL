@@ -587,7 +587,7 @@ fn history_section(app: &mut TransfelApp, ui: &mut egui::Ui) {
                         );
                     });
                     if let TransferState::Error(e) = &t.state {
-                        ui.colored_label(theme::DANGER, egui::RichText::new(e).size(11.0));
+                        ui.colored_label(theme::DANGER, egui::RichText::new("Ocurrió un error, intente de nuevo").size(11.0));
                     }
                 }
             });
