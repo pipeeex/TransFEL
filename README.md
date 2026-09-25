@@ -8,7 +8,7 @@
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D6">
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Rust%20%2B%20egui-CE422B">
   <img alt="Mobile" src="https://img.shields.io/badge/android-Kotlin%20%2B%20Compose-3DDC84">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="License" src="https://img.shields.io/badge/license-GPLv3-blue">
 </p>
 
 ---
