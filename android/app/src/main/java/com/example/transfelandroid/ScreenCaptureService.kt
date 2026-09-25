@@ -22,7 +22,26 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 class ScreenCaptureService : Service() {
+    companion object {
+        const val ACTION_ESTADO = "com.example.transfelandroid.ESTADO"
+        const val ACTION_PAUSAR = "com.example.transfelandroid.PAUSAR"
+        const val ACTION_TERMINAR = "com.example.transfelandroid.TERMINAR"
 
+        const val EXTRA_TIPO = "tipo"
+        const val EXTRA_MENSAJE = "estado"
+
+        const val TIPO_LOG = "LOG"
+        const val TIPO_CONECTANDO = "CONECTANDO"
+        const val TIPO_TRANSMITIENDO = "TRANSMITIENDO"
+        const val TIPO_PAUSADA = "PAUSADA"
+        const val TIPO_TERMINADA = "TERMINADA"
+        const val TIPO_ERROR = "ERROR"
+
+        /** La UI lo consulta al volver a primer plano para resincronizarse. */
+        @Volatile
+        var activo: Boolean = false
+            private set
+    }
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
 
@@ -44,28 +63,18 @@ class ScreenCaptureService : Service() {
                 intent: Intent?
             ) {
 
-                if (
-                    intent?.action ==
-                    "com.example.transfelandroid.PAUSAR"
-                ) {
+                if (intent?.action == ACTION_PAUSAR) {
+                    if (!running) {
+                        enviarEstado("Ignorado: no hay transmision activa")
+                        return
+                    }
 
-                    transmisionPausada =
-                        intent.getBooleanExtra(
-                            "pausada",
-                            false
-                        )
+                    transmisionPausada = intent.getBooleanExtra("pausada", false)
 
                     if (transmisionPausada) {
-
-                        enviarEstado(
-                            "TRANSMISION: PAUSADA"
-                        )
-
+                        enviarEvento(TIPO_PAUSADA, "Transmision pausada")
                     } else {
-
-                        enviarEstado(
-                            "TRANSMISION: REANUDADA"
-                        )
+                        enviarEvento(TIPO_TRANSMITIENDO, "Transmision reanudada")
                     }
                 }
             }
@@ -79,15 +88,12 @@ class ScreenCaptureService : Service() {
                 intent: Intent?
             ) {
 
-                if (
-                    intent?.action ==
-                    "com.example.transfelandroid.TERMINAR"
-                ) {
-
-                    enviarEstado(
-                        "TERMINANDO TRANSMISION..."
-                    )
-
+                if (intent?.action == ACTION_TERMINAR) {
+                    if (!activo) {
+                        enviarEvento(TIPO_TERMINADA, "No habia nada que detener")
+                        return
+                    }
+                    enviarEstado("Deteniendo...")
                     detenerTransmision()
                 }
             }
@@ -98,11 +104,8 @@ class ScreenCaptureService : Service() {
 
             override fun onStop() {
 
-                enviarEstado(
-                    "MEDIAPROJECTION: detenida"
-                )
-
-                running = false
+                activo = false
+                enviarEvento(TIPO_TERMINADA, "El sistema detuvo la captura")
 
                 cerrarConexion()
 
@@ -179,6 +182,8 @@ class ScreenCaptureService : Service() {
             enviarEstado(
                 "SERVICE: foreground OK"
             )
+            activo = true
+            enviarEvento(TIPO_CONECTANDO, "Preparando captura")
 
         } catch (e: Exception) {
 
@@ -222,6 +227,7 @@ class ScreenCaptureService : Service() {
                 )
 
                 stopSelf()
+                enviarEvento(TIPO_ERROR, "No se pudo iniciar la captura")
 
                 return START_NOT_STICKY
             }
@@ -350,6 +356,7 @@ class ScreenCaptureService : Service() {
             )
 
             conectarRust()
+            enviarEvento(TIPO_CONECTANDO, "Conectado al PC, esperando video")
 
             iniciarVirtualDisplay(
                 width,
@@ -363,7 +370,7 @@ class ScreenCaptureService : Service() {
             enviarEstado(
                 "ERROR H264: ${e.message}"
             )
-
+            enviarEvento(TIPO_ERROR, "No se pudo conectar al PC. ¿Está abierto TransFEL?")
             detenerTransmision()
         }
     }
@@ -537,9 +544,8 @@ class ScreenCaptureService : Service() {
 
                                 if (frames == 1) {
 
-                                    enviarEstado(
-                                        "H264: PRIMER FRAME ENVIADO"
-                                    )
+                                    enviarEvento(TIPO_TRANSMITIENDO, "Transmitiendo")
+
                                 }
 
                                 if (
@@ -617,13 +623,11 @@ class ScreenCaptureService : Service() {
 
         } catch (e: Exception) {
 
-            enviarEstado(
-                "ERROR ENVIANDO FRAME: ${e.message}"
-            )
-
+            enviarEvento(TIPO_ERROR, "Se perdio la conexion con el PC")
             running = false
         }
     }
+    
 
     private fun cerrarConexion() {
 
@@ -655,14 +659,10 @@ class ScreenCaptureService : Service() {
 
     private fun detenerTransmision() {
 
-        if (!running &&
-            mediaProjection == null &&
-            encoder == null &&
-            virtualDisplay == null
-        ) {
-
+        if (!running && mediaProjection == null && encoder == null && virtualDisplay == null) {
+            activo = false
+            enviarEvento(TIPO_TERMINADA, "Transmision terminada")
             stopSelf()
-
             return
         }
 
@@ -728,36 +728,24 @@ class ScreenCaptureService : Service() {
 
         mediaProjection = null
 
-        enviarEstado(
-            "TRANSMISION TERMINADA"
-        )
+        activo = false
+        enviarEvento(TIPO_TERMINADA, "Transmision terminada")
 
-        stopForeground(
-            STOP_FOREGROUND_REMOVE
-        )
-
+        stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
+    private fun enviarEvento(tipo: String, mensaje: String) {
+        val intent = Intent(ACTION_ESTADO)
+        intent.setPackage(packageName)
+        intent.putExtra(EXTRA_TIPO, tipo)
+        intent.putExtra(EXTRA_MENSAJE, mensaje)
+        sendBroadcast(intent)
+    }
     private fun enviarEstado(
         mensaje: String
     ) {
-
-        val intent =
-            Intent(
-                "com.example.transfelandroid.ESTADO"
-            )
-
-        intent.setPackage(
-            packageName
-        )
-
-        intent.putExtra(
-            "estado",
-            mensaje
-        )
-
-        sendBroadcast(intent)
+        enviarEvento(TIPO_LOG, mensaje)
     }
 
     private fun createNotificationChannel() {
@@ -799,7 +787,7 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
 
-        running = false
+        activo = false
 
         try {
 
