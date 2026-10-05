@@ -38,10 +38,10 @@ pub fn show(app: &mut TransfelApp, ui: &mut egui::Ui) {
             ui.add_space(25.0);
             section_label(ui, "FUNCIONES");
 
-            nav_button(ui, app, Tab::Pantalla, "▣   Pantalla");
+            nav_button(ui, app, Tab::Archivos, "▤   Transfiere tus Archivos");
 
             ui.add_space(7.0);
-            nav_button(ui, app, Tab::Archivos, "▤   Archivos");
+            nav_button(ui, app, Tab::Pantalla, "▣   Pantalla");
 
             ui.add_space(7.0);
             nav_button(ui, app, Tab::Conexion, "📶   Conexion");

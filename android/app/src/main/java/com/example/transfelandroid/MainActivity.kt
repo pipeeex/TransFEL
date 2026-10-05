@@ -155,11 +155,40 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // El servicio pudo morir mientras la app estaba en segundo plano.
-        if (!ScreenCaptureService.activo && estado.enCurso) {
-            estado = EstadoTransmision.INACTIVA
-            pausada = false
-            mensaje = "La transmision se detuvo"
+        resincronizar()
+    }
+
+    /** Alinea la UI con lo que el servicio esta haciendo de verdad. */
+    private fun resincronizar() {
+        if (!ScreenCaptureService.activo) {
+            if (estado.enCurso || estado.ocupada) {
+                estado = EstadoTransmision.INACTIVA
+                pausada = false
+                mensaje = "La transmision se detuvo"
+            }
+            return
+        }
+
+        // El servicio sigue vivo: la UI debe reflejarlo.
+        when (ScreenCaptureService.ultimoTipo) {
+            ScreenCaptureService.TIPO_TRANSMITIENDO -> {
+                estado = EstadoTransmision.TRANSMITIENDO
+                pausada = false
+                mensaje = "Transmitiendo al PC"
+            }
+            ScreenCaptureService.TIPO_PAUSADA -> {
+                estado = EstadoTransmision.PAUSADA
+                pausada = true
+                mensaje = "Transmision en pausa"
+            }
+            ScreenCaptureService.TIPO_CONECTANDO -> {
+                estado = EstadoTransmision.CONECTANDO
+                mensaje = ScreenCaptureService.ultimoMensaje
+            }
+            ScreenCaptureService.TIPO_ERROR -> {
+                estado = EstadoTransmision.ERROR
+                mensaje = ScreenCaptureService.ultimoMensaje
+            }
         }
     }
 

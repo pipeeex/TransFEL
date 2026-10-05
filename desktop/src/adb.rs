@@ -19,37 +19,73 @@ pub fn silent(program: &Path) -> Command {
     cmd
 }
 
+fn adb_name() -> &'static str {
+    if cfg!(windows) { "adb.exe" } else { "adb" }
+}
+
+fn ffmpeg_name() -> &'static str {
+    if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
+}
+
+#[cfg(unix)]
+fn asegurar_ejecutable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut permisos = meta.permissions();
+        if permisos.mode() & 0o111 == 0 {
+            permisos.set_mode(0o755);
+            let _ = std::fs::set_permissions(path, permisos);
+        }
+    }
+}
+#[cfg(not(unix))]
+fn asegurar_ejecutable(_path: &Path) {}
+
 fn locate(binary: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    let dir = exe.parent().unwrap_or(Path::new("."));
+    let dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     // 1) junto al ejecutable: ./tools/<bin>
-    let installed = dir.join("tools").join(binary);
-    if installed.exists() {
-        return installed;
+    let instalado = dir.join("tools").join(binary);
+    if instalado.exists() {
+        asegurar_ejecutable(&instalado);
+        return instalado;
     }
 
-    // 2) desarrollo: ../../tools/<bin>
-    if let Some(dev) = dir
+    // 2) macOS: TransFEL.app/Contents/Resources/tools/<bin>
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(padre) = dir.parent() {
+            let recursos = padre.join("Resources").join("tools").join(binary);
+            if recursos.exists() {
+                asegurar_ejecutable(&recursos);
+                return recursos;
+            }
+        }
+    }
+
+    // 3) desarrollo: ../../tools/<bin>
+    if let Some(desarrollo) = dir
         .parent()
         .and_then(|p| p.parent())
         .map(|p| p.join("tools").join(binary))
     {
-        if dev.exists() {
-            return dev;
+        if desarrollo.exists() {
+            asegurar_ejecutable(&desarrollo);
+            return desarrollo;
         }
     }
 
-    // 3) PATH del sistema
+    // 4) PATH del sistema (lo normal en Linux y macOS)
     PathBuf::from(binary)
 }
 
 pub fn adb_path() -> &'static Path {
-    ADB.get_or_init(|| locate(if cfg!(windows) { "adb.exe" } else { "adb" }))
+    ADB.get_or_init(|| locate(adb_name()))
 }
 
 pub fn ffmpeg_path() -> &'static Path {
-    FFMPEG.get_or_init(|| locate(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }))
+    FFMPEG.get_or_init(|| locate(ffmpeg_name()))
 }
 
 /// Ejecuta `adb <args>` y devuelve stdout limpio.
@@ -75,3 +111,5 @@ pub fn shell(serial: &str, cmd: &str) -> Option<String> {
 pub fn getprop(serial: &str, prop: &str) -> Option<String> {
     shell(serial, &format!("getprop {prop}"))
 }
+
+

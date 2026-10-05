@@ -95,7 +95,7 @@ pub fn enable_from_usb(&mut self, serial: String) {
 		say("Leyendo la ip del dispositivo...");
 		let Some(ip) = device_ip(&serial) else {
 			let _ = tx.send(WifiEvent::Failure(
-				"No se pudo ver la ip. Asegurese q este conectaod a internet".into(),
+				"No se pudo ver la ip. Asegurese que este conectado a internet".into(),
 			));
 			return;
 		};
@@ -246,10 +246,30 @@ fn valid_ip(ip: &str) -> bool {
 // ── Persistencia de la ultima dirección ──
 
 fn config_path() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(crate::files::home_dir);
-    base.join("TransFEL")
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return PathBuf::from(appdata).join("TransFEL");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return crate::files::home_dir()
+        .join("Library")
+        .join("Application Support")
+        .join("TransFEL")
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(xdg).join("transfel");
+        }
+        return crate::files::home_dir().join(".config").join("transfel");
+    }
+    #[allow(unreachable_code)]
+    crate::files::home_dir().join(".transfel")
 }
 
 fn load_last_address() -> Option<String> {

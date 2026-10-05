@@ -123,10 +123,6 @@ impl AndroidDest {
     }
 }
 
-pub fn default_pc_dest() -> PathBuf {
-    home_dir().join("Downloads").join("TransFEL")
-}
-
 pub fn category_of(name: &str) -> Category {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match ext.as_deref() {
@@ -337,10 +333,46 @@ impl Default for FileManager {
 }
 
 pub fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
+    #[cfg(windows)]
+    {
+        if let Some(p) = std::env::var_os("USERPROFILE") {
+            return PathBuf::from(p);    
+        }
+    }
+    std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub fn user_dir(clave: &str) -> PathBuf {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let var = match clave {
+            "Downloads" => "XDG_DOWNLOAD_DIR",
+            "Desktop" => "XDG_DESKTOP_DIR",
+            "Documents" => "XDG_DOCUMENTS_DIR",
+            "Pictures" => "XDG_PICTURES_DIR",
+            _ => "",
+        };
+        if !var.is_empty() {
+            if let Some(valor) = std::env::var_os(var) {
+                let p = PathBuf::from(valor);
+                if p.exists() {
+                    return p;
+                }
+            }
+        }
+    }
+    let candidato = home_dir().join(clave);
+    if candidato.exists() {
+        candidato
+    } else {
+        home_dir()
+    }
+}
+
+pub fn default_pc_dest() -> PathBuf {
+    user_dir("Downloads").join("TransFEL")
 }
 
 impl FileManager {

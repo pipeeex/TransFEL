@@ -8,7 +8,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -20,6 +19,8 @@ import android.view.Surface
 import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import android.hardware.display.DisplayManager
+import android.os.Build
 
 class ScreenCaptureService : Service() {
     companion object {
@@ -36,10 +37,21 @@ class ScreenCaptureService : Service() {
         const val TIPO_PAUSADA = "PAUSADA"
         const val TIPO_TERMINADA = "TERMINADA"
         const val TIPO_ERROR = "ERROR"
+        const val TAG_RESIZE = -65535   // 0xFFFF0001: tamaño del video
+        const val TAG_CROP = -65534     // 0xFFFF0002: area util dentro del video
 
         /** La UI lo consulta al volver a primer plano para resincronizarse. */
         @Volatile
         var activo: Boolean = false
+            private set
+
+        /** Ultimo estado emitido, para que la UI se reenganche sin esperar eventos. */
+        @Volatile
+        var ultimoTipo: String = TIPO_TERMINADA
+            private set
+
+        @Volatile
+        var ultimoMensaje: String = ""
             private set
     }
     private var mediaProjection: MediaProjection? = null
@@ -55,8 +67,73 @@ class ScreenCaptureService : Service() {
 
     private var transmisionPausada = false
 
-    private val pauseReceiver =
-        object : BroadcastReceiver() {
+    private var anchoActual = 0
+    private var altoActual = 0
+    private var reiniciando = false
+    private var lado = 0   // lado del cuadrado de captura
+    private var ultimaRotacion = 0L
+
+    @Volatile
+    private var pedirKeyframe = false
+
+    /** Dimensiones actuales, redondeadas a par (H.264 lo exige). */
+    /** Tamaño actual de la pantalla, alineado a multiplo de 16 (lo que prefieren los encoders). */
+    /**
+     * Tamaño real del display. UNA sola fuente: mezclar getRealMetrics con
+     * resources.displayMetrics hacia que durante el giro se leyeran
+     * orientaciones distintas en lecturas consecutivas, y eso disparaba
+     * un bucle infinito de rotaciones.
+     */
+    private fun tamanoPantalla(): Pair<Int, Int>? {
+        return try {
+            val dm = android.util.DisplayMetrics()
+            val gestor = getSystemService(DisplayManager::class.java)
+            val display = gestor?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                ?: return null
+
+            @Suppress("DEPRECATION")
+            display.getRealMetrics(dm)
+
+            if (dm.widthPixels <= 0 || dm.heightPixels <= 0) {
+                null
+            } else {
+                alinear(dm.widthPixels) to alinear(dm.heightPixels)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Solo para el arranque, donde si o si hace falta un valor. */
+    private fun tamanoInicial(): Pair<Int, Int> {
+        tamanoPantalla()?.let { return it }
+        val m = resources.displayMetrics
+        return alinear(m.widthPixels) to alinear(m.heightPixels)
+    }
+
+    private fun alinear(valor: Int): Int = (valor / 16) * 16
+    private fun enteroABytes(valor: Int): ByteArray = byteArrayOf(
+        ((valor shr 24) and 0xFF).toByte(),
+        ((valor shr 16) and 0xFF).toByte(),
+        ((valor shr 8) and 0xFF).toByte(),
+        (valor and 0xFF).toByte(),
+    )
+
+    /** Avisa al PC que zona del cuadrado contiene la pantalla real. */
+    private fun enviarCrop(width: Int, height: Int) {
+        val salida = outputStream ?: return
+        try {
+            synchronized(this) {
+                salida.write(enteroABytes(TAG_CROP))
+                salida.write(enteroABytes(width))
+                salida.write(enteroABytes(height))
+                salida.flush()
+            }
+        } catch (e: Exception) {
+            enviarEstado("No se pudo avisar de la rotacion: ${e.message}")
+        }
+    }
+    private val pauseReceiver = object : BroadcastReceiver() {
 
             override fun onReceive(
                 context: Context?,
@@ -80,8 +157,7 @@ class ScreenCaptureService : Service() {
             }
         }
 
-    private val terminarReceiver =
-        object : BroadcastReceiver() {
+    private val terminarReceiver = object : BroadcastReceiver() {
 
             override fun onReceive(
                 context: Context?,
@@ -99,8 +175,7 @@ class ScreenCaptureService : Service() {
             }
         }
 
-    private val mediaProjectionCallback =
-        object : MediaProjection.Callback() {
+    private val mediaProjectionCallback = object : MediaProjection.Callback() {
 
             override fun onStop() {
 
@@ -121,10 +196,8 @@ class ScreenCaptureService : Service() {
 
         createNotificationChannel()
 
-        val pauseFilter =
-            IntentFilter(
-                "com.example.transfelandroid.PAUSAR"
-            )
+        val pauseFilter = IntentFilter(
+                "com.example.transfelandroid.PAUSAR")
 
         registerReceiver(
             pauseReceiver,
@@ -144,11 +217,7 @@ class ScreenCaptureService : Service() {
         )
     }
 
-    override fun onStartCommand(
-        intent: Intent?,
-        flags: Int,
-        startId: Int
-    ): Int {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
         enviarEstado(
             "SERVICE: iniciado"
@@ -282,183 +351,143 @@ class ScreenCaptureService : Service() {
     }
 
     private fun iniciarEncoder() {
+        val (w, h) = tamanoInicial()
 
+        // Capturamos en un cuadrado del lado mayor. Asi AUTO_MIRROR encaja
+        // la pantalla en cualquier orientacion sin tocar nada: la rotacion
+        // deja de requerir reiniciar encoder ni VirtualDisplay.
+        lado = alinear(maxOf(w, h))
+        anchoActual = w
+        altoActual = h
+
+        enviarEstado("Captura: cuadrado ${lado}x${lado}, pantalla ${w}x${h}")
+
+        // El pipeline arranca SOLO cuando el socket esta listo: los primeros
+        // bytes del encoder son SPS/PPS y sin ellos FFmpeg no decodifica.
+        conectarRust(w, h)
+    }
+    private fun crearPipeline(width: Int, height: Int) {
         try {
+            enviarEstado("Pipeline: ${width}x${height}")
 
-            val metrics =
-                resources.displayMetrics
-
-            val width =
-                metrics.widthPixels
-
-            val height =
-                metrics.heightPixels
-
-            val fps = 30
-
-            val bitrate = 4_000_000
-
-            enviarEstado(
-                "Resolucion: ${width}x${height}"
+            val format = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC, width, height,
             )
-
-            enviarEstado(
-                "Creando encoder H264..."
-            )
-
-            val format =
-                MediaFormat.createVideoFormat(
-                    MediaFormat.MIMETYPE_VIDEO_AVC,
-                    width,
-                    height
-                )
-
             format.setInteger(
                 MediaFormat.KEY_COLOR_FORMAT,
-                MediaCodecInfo.CodecCapabilities
-                    .COLOR_FormatSurface
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
             )
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            format.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
 
-            format.setInteger(
-                MediaFormat.KEY_BIT_RATE,
-                bitrate
-            )
+            encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            enviarEstado("Pipeline: codec creado")
 
-            format.setInteger(
-                MediaFormat.KEY_FRAME_RATE,
-                fps
-            )
+            encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            enviarEstado("Pipeline: configurado")
 
-            format.setInteger(
-                MediaFormat.KEY_I_FRAME_INTERVAL,
-                1
-            )
-
-            encoder =
-                MediaCodec.createEncoderByType(
-                    MediaFormat.MIMETYPE_VIDEO_AVC
-                )
-
-            encoder?.configure(
-                format,
-                null,
-                null,
-                MediaCodec.CONFIGURE_FLAG_ENCODE
-            )
-
-            inputSurface =
-                encoder?.createInputSurface()
-
+            inputSurface = encoder?.createInputSurface()
             encoder?.start()
+            enviarEstado("Pipeline: encoder iniciado")
 
-            enviarEstado(
-                "H264: encoder iniciado"
-            )
-
-            conectarRust()
-            enviarEvento(TIPO_CONECTANDO, "Conectado al PC, esperando video")
-
-            iniciarVirtualDisplay(
-                width,
-                height
-            )
+            conectarVirtualDisplay(width, height)
+            enviarEstado("Pipeline: display listo")
 
             iniciarCodificacion()
 
         } catch (e: Exception) {
-
-            enviarEstado(
-                "ERROR H264: ${e.message}"
-            )
-            enviarEvento(TIPO_ERROR, "No se pudo conectar al PC. ¿Está abierto TransFEL?")
+            enviarEvento(TIPO_ERROR, "Fallo en pipeline (${width}x${height}): ${e.message}")
             detenerTransmision()
         }
     }
 
-    private fun conectarRust() {
+    /**
+     * La rotacion ya no reinicia encoder ni VirtualDisplay: la superficie es
+     * cuadrada y AUTO_MIRROR reencaja la pantalla solo. Solo hay que decirle
+     * al PC que zona del cuadrado mirar.
+     */
+    @Synchronized
+    private fun actualizarOrientacion(width: Int, height: Int) {
+        if (width == anchoActual && height == altoActual) return
 
+        enviarEstado("Rotacion: ${anchoActual}x${altoActual} -> ${width}x${height}")
+
+        anchoActual = width
+        altoActual = height
+
+        enviarCrop(width, height)
+
+        // El keyframe lo pide el propio hilo de codificacion: MediaCodec no
+        // es seguro de tocar desde otro hilo mientras esta en dequeue.
+        pedirKeyframe = true
+    }
+
+    private fun conectarRust(width: Int, height: Int) {
         Thread {
-
             try {
+                enviarEstado("TCP: conectando al PC...")
 
-                enviarEstado(
-                    "TCP: conectando a Rust..."
-                )
-
-                val nuevoSocket =
-                    Socket()
-
-                nuevoSocket.connect(
-                    InetSocketAddress(
-                        "127.0.0.1",
-                        5000
-                    ),
-                    5000
-                )
-
+                val nuevoSocket = Socket()
+                nuevoSocket.connect(InetSocketAddress("127.0.0.1", 5000), 5000)
+                nuevoSocket.tcpNoDelay = true
                 socket = nuevoSocket
 
-                outputStream =
-                    BufferedOutputStream(
-                        nuevoSocket.getOutputStream()
-                    )
+                val salida = BufferedOutputStream(nuevoSocket.getOutputStream())
 
-                enviarEstado(
-                    "TCP: CONECTADO A RUST"
-                )
+                // 1) tamaño real del video: el cuadrado.
+                salida.write(enteroABytes(TAG_RESIZE))
+                salida.write(enteroABytes(lado))
+                salida.write(enteroABytes(lado))
+                // 2) zona util dentro de ese cuadrado.
+                salida.write(enteroABytes(TAG_CROP))
+                salida.write(enteroABytes(width))
+                salida.write(enteroABytes(height))
+                salida.flush()
+
+                // Recien ahora los frames pueden salir.
+                outputStream = salida
+
+                enviarEvento(TIPO_CONECTANDO, "Conectado al PC, esperando video")
+
+                // Ahora si: encoder + VirtualDisplay, con el socket ya abierto.
+                crearPipeline(lado, lado)
 
             } catch (e: Exception) {
-
-                enviarEstado(
-                    "ERROR TCP: ${e.message}"
-                )
+                enviarEvento(TIPO_ERROR, "No se pudo conectar al PC. ¿Esta abierto TransFEL?")
             }
-
         }.start()
     }
 
-    private fun iniciarVirtualDisplay(
-        width: Int,
-        height: Int
-    ) {
-
+    private fun conectarVirtualDisplay(width: Int, height: Int) {
         try {
+            if (virtualDisplay != null) {
+                enviarEstado("VirtualDisplay: ya existe, se reutiliza")
+                return
+            }
 
-            enviarEstado(
-                "Creando VirtualDisplay..."
+            enviarEstado("Creando VirtualDisplay ${width}x${height}...")
+
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "TransFEL",
+                width,
+                height,
+                resources.displayMetrics.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                inputSurface,
+                null,
+                null,
             )
 
-            virtualDisplay =
-                mediaProjection?.createVirtualDisplay(
-                    "TransFEL",
-                    width,
-                    height,
-                    resources.displayMetrics.densityDpi,
-                    DisplayManager
-                        .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    inputSurface,
-                    null,
-                    null
-                )
-
-            if (virtualDisplay != null) {
-
-                enviarEstado(
-                    "VIRTUALDISPLAY: FUNCIONA"
-                )
-
+            if (virtualDisplay == null) {
+                enviarEstado("ERROR: VirtualDisplay NULL")
             } else {
-
-                enviarEstado(
-                    "ERROR: VirtualDisplay NULL"
-                )
+                enviarEstado("VIRTUALDISPLAY: FUNCIONA")
             }
 
         } catch (e: Exception) {
-
-            enviarEstado(
-                "ERROR VIRTUALDISPLAY: ${e.message}"
-            )
+            enviarEstado("ERROR VIRTUALDISPLAY: ${e.message}")
         }
     }
 
@@ -481,19 +510,24 @@ class ScreenCaptureService : Service() {
 
                 while (running) {
 
-                    val index =
-                        encoder?.dequeueOutputBuffer(
-                            bufferInfo,
-                            10000
-                        ) ?: -1
+                    val codec = encoder ?: break
 
-                    if (
-                        index ==
-                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED
-                    ) {
+                    if (pedirKeyframe) {
+                        pedirKeyframe = false
+                        runCatching {
+                            val params = android.os.Bundle()
+                            params.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                            codec.setParameters(params)
+                        }.onFailure {
+                            enviarEstado("No se pudo pedir keyframe: ${it.message}")
+                        }
+                    }
 
-                        val nuevoFormato =
-                            encoder?.outputFormat
+                    val index = codec.dequeueOutputBuffer(bufferInfo, 10000)
+
+                    if (index ==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+
+                        val nuevoFormato = codec.outputFormat
 
                         enviarEstado(
                             "H264: formato cambiado"
@@ -506,7 +540,7 @@ class ScreenCaptureService : Service() {
                     } else if (index >= 0) {
 
                         val buffer =
-                            encoder?.getOutputBuffer(
+                            codec.getOutputBuffer(
                                 index
                             )
 
@@ -530,6 +564,12 @@ class ScreenCaptureService : Service() {
                             )
 
                             buffer.get(datos)
+
+                            val esConfig =
+                                (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                            if (esConfig) {
+                                enviarEstado("H264: SPS/PPS (${datos.size} bytes)")
+                            }
 
                             if (
                                 !transmisionPausada &&
@@ -559,7 +599,7 @@ class ScreenCaptureService : Service() {
                             }
                         }
 
-                        encoder?.releaseOutputBuffer(
+                        codec.releaseOutputBuffer(
                             index,
                             false
                         )
@@ -569,60 +609,43 @@ class ScreenCaptureService : Service() {
             } catch (e: Exception) {
 
                 if (running) {
-
-                    enviarEstado(
-                        "ERROR CODIFICADOR: ${e.message}"
-                    )
+                    enviarEvento(TIPO_ERROR, "ERROR CODIFICADOR: ${e.message}")
+                } else {
+                    enviarEstado("Codificador detenido: ${e.message}")
                 }
             }
+
+            enviarEstado("Hilo de codificacion terminado (running=$running)")
 
         }.start()
     }
 
-    private fun enviarFrameTCP(
-        datos: ByteArray
-    ) {
+    private fun enviarFrameTCP(datos: ByteArray) {
 
         try {
 
-            val salida =
-                outputStream
+            val salida = outputStream
 
             if (salida == null) {
                 return
             }
 
-            val tamaño =
-                datos.size
+            val tamaño = datos.size
 
-            val tamañoBytes =
-                byteArrayOf(
+            val tamañoBytes = byteArrayOf(
                     ((tamaño shr 24) and 0xFF).toByte(),
                     ((tamaño shr 16) and 0xFF).toByte(),
                     ((tamaño shr 8) and 0xFF).toByte(),
                     (tamaño and 0xFF).toByte()
-                )
+            )
 
             synchronized(this) {
-
-                salida.write(
-                    tamañoBytes
-                )
-
-                salida.write(
-                    datos
-                )
-
-                /*
-                 * No hacemos flush en cada frame.
-                 *
-                 * Esto reduce carga y mejora
-                 * el rendimiento de la transmision.
-                 */
+                salida.write(tamañoBytes)
+                salida.write(datos)
+                salida.flush()   // imprescindible en streaming en vivo
             }
 
         } catch (e: Exception) {
-
             enviarEvento(TIPO_ERROR, "Se perdio la conexion con el PC")
             running = false
         }
@@ -630,6 +653,8 @@ class ScreenCaptureService : Service() {
     
 
     private fun cerrarConexion() {
+
+        enviarEstado("Cerrando socket (" + Thread.currentThread().stackTrace.getOrNull(3)?.methodName + ")")
 
         try {
 
@@ -736,15 +761,17 @@ class ScreenCaptureService : Service() {
     }
 
     private fun enviarEvento(tipo: String, mensaje: String) {
+        if (tipo != TIPO_LOG) {
+            ultimoTipo = tipo
+            ultimoMensaje = mensaje
+        }
         val intent = Intent(ACTION_ESTADO)
         intent.setPackage(packageName)
         intent.putExtra(EXTRA_TIPO, tipo)
         intent.putExtra(EXTRA_MENSAJE, mensaje)
         sendBroadcast(intent)
     }
-    private fun enviarEstado(
-        mensaje: String
-    ) {
+    private fun enviarEstado(mensaje: String) {
         enviarEvento(TIPO_LOG, mensaje)
     }
 
@@ -786,7 +813,6 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
-
         activo = false
 
         try {
@@ -864,10 +890,49 @@ class ScreenCaptureService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? {
+    override fun onBind(intent: Intent?): IBinder? {
 
         return null
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        enviarEstado("Config cambiada (orient=${newConfig.orientation})")
+        comprobarTamano(0, null)
+    }
+
+    /**
+     * El giro tarda en asentarse. Exigimos DOS lecturas iguales seguidas antes
+     * de darlo por bueno, y un margen de 1s entre rotaciones aplicadas, para
+     * que lecturas intermedias no provoquen un ida y vuelta infinito.
+     */
+    private fun comprobarTamano(intento: Int, anterior: Pair<Int, Int>?) {
+        if (intento > 10) return
+
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (!running || anchoActual == 0) return@postDelayed
+
+            val ahora = tamanoPantalla()
+
+            when {
+                // Lectura invalida: reintentar.
+                ahora == null -> comprobarTamano(intento + 1, null)
+
+                // Sin cambios respecto a lo que ya tenemos.
+                ahora.first == anchoActual && ahora.second == altoActual ->
+                    comprobarTamano(intento + 1, ahora)
+
+                // Cambio detectado pero aun no confirmado por una segunda lectura.
+                anterior != ahora -> comprobarTamano(intento + 1, ahora)
+
+                // Confirmado. Respetamos el margen entre rotaciones.
+                System.currentTimeMillis() - ultimaRotacion < 1000 -> {}
+
+                else -> {
+                    ultimaRotacion = System.currentTimeMillis()
+                    Thread { actualizarOrientacion(ahora.first, ahora.second) }.start()
+                }
+            }
+        }, 150L)
     }
 }

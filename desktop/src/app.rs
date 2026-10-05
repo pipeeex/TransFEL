@@ -168,20 +168,21 @@ impl TransfelApp {
             return;
         };
 
-        let (w, h) = (self.device.width, self.device.height);
-        if frame.len() != w * h * 4 {
+        if frame.data.len() != frame.width * frame.height * 4 {
             return;
         }
+        let image = egui::ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.data);
 
-        let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &frame);
         match &mut self.texture {
-            Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-            none => {
-                *none = Some(ctx.load_texture(
+            Some(tex) if tex.size() == [frame.width, frame.height] => {
+                tex.set(image, egui::TextureOptions::LINEAR);
+            }
+            hueco => {
+                *hueco = Some(ctx.load_texture(
                     "android_screen",
                     image,
                     egui::TextureOptions::LINEAR,
-                ))
+                ));
             }
         }
     }
@@ -211,8 +212,8 @@ impl eframe::App for TransfelApp {
                     .inner_margin(egui::Margin::same(20)),
             )
             .show(ui, |ui| match self.tab {
-                Tab::Pantalla => ui::screen_view::show(self, ui),
                 Tab::Archivos => ui::files_view::show(self, ui),
+                Tab::Pantalla => ui::screen_view::show(self, ui),
                 Tab::Conexion => ui::wifi_view::show(self, ui),
             });
 
