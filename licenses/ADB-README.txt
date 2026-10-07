@@ -17,3 +17,4 @@ These binaries are redistributed unmodified.
 
 On Linux and macOS TransFEL uses the adb provided by the system package manager
 and bundles nothing.
+
