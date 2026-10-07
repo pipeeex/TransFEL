@@ -40,6 +40,11 @@ pub struct TransfelApp {
     pub texture: Option<egui::TextureHandle>,
 
     pub files: FileManager,
+
+    /// Control remoto activado por el usuario.
+    pub control_activo: bool,
+    /// Ultimo punto enviado, para no inundar el socket.
+    pub ultimo_toque: Option<(i32, i32)>,
 }
 
 impl TransfelApp {
@@ -62,6 +67,9 @@ impl TransfelApp {
             texture: None,
 
             files: FileManager::default(),
+
+            control_activo: false,
+            ultimo_toque: None,
 
             device_events: watcher::spawn(),
             info_tx,

@@ -1,4 +1,5 @@
 ﻿    use crate::app::{StreamState, TransfelApp};
+    use crate::stream;
     use crate::theme;
     use eframe::egui;
 
@@ -27,6 +28,30 @@
                     StreamState::EnVivo => { ui.colored_label(theme::SUCCESS, "● EN VIVO"); }
                     StreamState::Cerrada => { ui.colored_label(theme::DANGER, "● DESCONECTADO"); }
                     StreamState::Inactiva => {}
+                }
+
+                if app.stream_state == StreamState::EnVivo {
+                    ui.add_space(10.0);
+
+                    // Botones de navegacion, con los simbolos de Android.
+                    if app.control_activo {
+                        if boton_nav(ui, Nav::Recientes).on_hover_text("Recientes").clicked() {
+                            app.stream.enviar_accion(stream::ACCION_RECIENTES);
+                        }
+                        if boton_nav(ui, Nav::Inicio).on_hover_text("Inicio").clicked() {
+                            app.stream.enviar_accion(stream::ACCION_INICIO);
+                        }
+                        if boton_nav(ui, Nav::Atras).on_hover_text("Atras").clicked() {
+                            app.stream.enviar_accion(stream::ACCION_ATRAS);
+                        }
+                        ui.add_space(6.0);
+                    }
+
+                    ui.checkbox(&mut app.control_activo, "\u{1f5b1} Control")
+                        .on_hover_text(
+                            "Controlar el telefono con el raton. Requiere activar TransFEL \
+                             en Ajustes de Accesibilidad del telefono.",
+                        );
                 }
             });
         });
@@ -74,7 +99,6 @@
         match &app.texture {
             Some(tex) => {
                 // AUTO_MIRROR centra la pantalla dentro del cuadrado conservando
-                // proporcion: calculamos esa zona y mostramos solo esa.
                 let lado = tex.size_vec2();
                 let encaje = (lado.x / cw).min(lado.y / ch);
                 let visible = egui::vec2(cw * encaje, ch * encaje);
@@ -88,11 +112,9 @@
                 );
                 painter.image(tex.id(), marco.shrink(1.0), uv, egui::Color32::WHITE);
 
-                let _respuesta = ui.interact(
-                    marco, 
-                    ui.id().with("pantalla_android"),
-                    egui::Sense::click_and_drag(),
-                );
+                if app.control_activo {
+                    manejar_raton(app, ui, marco, cw, ch);
+                }
             }
             None => {
                 placeholder(app, ui, &painter, marco);
@@ -130,7 +152,7 @@ fn placeholder(
         (
             "\u{26cc}",
             "Conexion cerrada",
-            "La app del celular finalizo la transmision",
+            "La app del celular finalizó la transmision",
             "",
             theme::DANGER,
         )
@@ -138,8 +160,8 @@ fn placeholder(
         (
             "\u{25a3}",
             "Pantalla Android",
-            "Inicia la transmision desde la app movil",
-            "Conectado por USB la transmision es mas fluida",
+            "Inicia la transmisión desde la app movil",
+            "Conectado por USB la transmisión es mas fluida",
             theme::MUTED,
         )
     };
@@ -214,4 +236,147 @@ fn placeholder(
             app.stream_state = StreamState::Inactiva;
         }
     }
+}
+
+/// Traduce el raton sobre la card en eventos tactiles para el telefono.
+fn manejar_raton(
+    app: &mut TransfelApp,
+    ui: &mut egui::Ui,
+    marco: egui::Rect,
+    ancho: f32,
+    alto: f32,
+) {
+    let respuesta = ui.interact(
+        marco,
+        ui.id().with("pantalla_android"),
+        egui::Sense::click_and_drag(),
+    );
+
+    if respuesta.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let punto_a_dispositivo = |punto: egui::Pos2| -> (i32, i32) {
+        let rel_x = ((punto.x - marco.min.x) / marco.width()).clamp(0.0, 1.0);
+        let rel_y = ((punto.y - marco.min.y) / marco.height()).clamp(0.0, 1.0);
+        (
+            (rel_x * ancho).round() as i32,
+            (rel_y * alto).round() as i32,
+        )
+    };
+
+    // ── Rueda del raton ──
+    let mut soltado = false;
+
+    if respuesta.hovered() {
+        let desplazamiento = ui.input(|i| i.smooth_scroll_delta.y);
+
+        if desplazamiento.abs() > 0.5 {
+            if let Some(punto) = ui.input(|i| i.pointer.hover_pos()) {
+                let (x, y) = punto_a_dispositivo(punto);
+
+                // El signo se invierte: rueda hacia arriba mueve el dedo hacia abajo.
+                let delta_px = (desplazamiento * 4.0).clamp(-alto * 0.5, alto * 0.5);
+                app.stream.enviar_rueda(x, y, delta_px.round() as i32);
+            }
+        }
+    }
+
+    // ── Toque y arrastre ──
+    let pulsado = respuesta.is_pointer_button_down_on();
+
+    let punto_actual = respuesta
+        .interact_pointer_pos()
+        .or_else(|| ui.input(|i| i.pointer.hover_pos()))
+        .map(punto_a_dispositivo);
+
+    match (pulsado, app.ultimo_toque) {
+        // Se acaba de pulsar.
+        (true, None) => {
+            if let Some((x, y)) = punto_actual {
+                app.ultimo_toque = Some((x, y));
+                app.stream.enviar_toque(stream::CTRL_ABAJO, x, y);
+            }
+        }
+
+        // Sigue pulsado: solo se avisa si de verdad se movio.
+        (true, Some(anterior)) => {
+            if let Some((x, y)) = punto_actual {
+                if (x, y) != anterior {
+                    app.ultimo_toque = Some((x, y));
+                    app.stream.enviar_toque(stream::CTRL_MOVER, x, y);
+                }
+            }
+        }
+
+        // Se solto.
+        (false, Some(anterior)) => {
+            let (x, y) = punto_actual.unwrap_or(anterior);
+            app.stream.enviar_toque(stream::CTRL_ARRIBA, x, y);
+            app.ultimo_toque = None;
+        }
+
+        (false, None) => {}
+    }
+}
+
+/// Los tres botones de navegacion de Android.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nav {
+    Atras,
+    Inicio,
+    Recientes,
+}
+
+/// Dibuja el icono en vez de usar un glifo: las fuentes que trae egui no
+/// incluyen todos los simbolos geometricos y algunos salian en blanco.
+fn boton_nav(ui: &mut egui::Ui, forma: Nav) -> egui::Response {
+    let (rect, respuesta) =
+        ui.allocate_exact_size(egui::vec2(30.0, 24.0), egui::Sense::click());
+
+    let encima = respuesta.hovered();
+    let trazo = if encima {
+        theme::ACCENT
+    } else {
+        egui::Color32::from_rgb(198, 198, 208)
+    };
+
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        6.0,
+        if encima { theme::CARD_HOVER } else { theme::CARD },
+    );
+
+    let centro = rect.center();
+    let radio = 5.0_f32;
+    let grosor = egui::Stroke::new(1.7, trazo);
+
+    match forma {
+        Nav::Atras => {
+            // Triangulo relleno apuntando a la izquierda.
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(centro.x - radio, centro.y),
+                    egui::pos2(centro.x + radio * 0.75, centro.y - radio),
+                    egui::pos2(centro.x + radio * 0.75, centro.y + radio),
+                ],
+                trazo,
+                egui::Stroke::NONE,
+            ));
+        }
+        Nav::Inicio => {
+            painter.circle_stroke(centro, radio, grosor);
+        }
+        Nav::Recientes => {
+            painter.rect_stroke(
+                egui::Rect::from_center_size(centro, egui::vec2(radio * 1.9, radio * 1.9)),
+                1.5,
+                grosor,
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+
+    respuesta
 }

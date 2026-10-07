@@ -9,6 +9,18 @@ use std::thread;
 
 pub const TAG_RESIZE: u32 = 0xFFFF_0001;
 pub const TAG_CROP: u32 = 0xFFFF_0002;
+
+// Eventos que el PC manda al telefono por el mismo socket.
+pub const CTRL_RUEDA: u32 = 0x0105;
+pub const CTRL_ABAJO: u32 = 0x0101;
+pub const CTRL_MOVER: u32 = 0x0102;
+pub const CTRL_ARRIBA: u32 = 0x0103;
+pub const CTRL_ACCION: u32 = 0x0104;
+
+/// Acciones globales de AccessibilityService.
+pub const ACCION_ATRAS: u32 = 1;
+pub const ACCION_INICIO: u32 = 2;
+pub const ACCION_RECIENTES: u32 = 3;
 const MAX_PACKET: u32 = 20_000_000;
 
 
@@ -28,6 +40,8 @@ pub struct StreamServer {
     pub resolution: SharedRes,
     /// Zona util dentro del video cuadrado: el tamaño logico de la pantalla.
     pub content: SharedRes,
+    /// Mitad de escritura del socket, para enviar eventos de control.
+    pub control: Arc<Mutex<Option<TcpStream>>>,
 }
 
 impl StreamServer {
@@ -39,11 +53,13 @@ impl StreamServer {
 
 
         let content: SharedRes = Arc::new(Mutex::new((width, height)));
+        let control: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
 
         let frames_bg = Arc::clone(&frames);
         let clients_bg = Arc::clone(&clients);
         let res_bg = Arc::clone(&resolution);
         let content_bg = Arc::clone(&content);
+        let control_bg = Arc::clone(&control);
 
 
         thread::spawn(move || {
@@ -60,17 +76,28 @@ impl StreamServer {
               let frames = Arc::clone(&frames_bg);
               let clients = Arc::clone(&clients_bg);
               let content = Arc::clone(&content_bg);
+              let control = Arc::clone(&control_bg);
+
+              // Mitad de escritura para el control remoto.
+              if let Ok(escritor) = stream.try_clone() {
+                  if let Ok(mut guardado) = control.lock() {
+                      *guardado = Some(escritor);
+                  }
+              }
 
               thread::spawn(move || {
                   clients.fetch_add(1, Ordering::Relaxed);
                   handle_connection(stream, tx, frames, res, content);
+                  if let Ok(mut guardado) = control.lock() {
+                      *guardado = None;
+                  }
                   clients.fetch_sub(1, Ordering::Relaxed);
                   println!("Conexion cerrada");
               });
             }
         });
 
-        Self { rx, frames, clients, resolution, content }
+        Self { rx, frames, clients, resolution, content, control }
     }
 
 
@@ -91,6 +118,54 @@ impl StreamServer {
     /// Vacia frames viejos para que no reaparezca la ultima imagen.
     pub fn drain(&self) {
      while self.rx.try_recv().is_ok() {}
+    }
+
+    /// Rueda del raton: desplazamiento vertical en pixeles del dispositivo.
+    pub fn enviar_rueda(&self, x: i32, y: i32, delta: i32) {
+        let Ok(mut guardado) = self.control.lock() else { return };
+        let Some(socket) = guardado.as_mut() else { return };
+
+        let mut buffer = [0u8; 16];
+        buffer[0..4].copy_from_slice(&CTRL_RUEDA.to_be_bytes());
+        buffer[4..8].copy_from_slice(&x.to_be_bytes());
+        buffer[8..12].copy_from_slice(&y.to_be_bytes());
+        buffer[12..16].copy_from_slice(&delta.to_be_bytes());
+
+        if socket.write_all(&buffer).is_err() {
+            *guardado = None;
+        }
+    }
+
+    pub fn control_disponible(&self) -> bool {
+        self.control.lock().map(|c| c.is_some()).unwrap_or(false)
+    }
+
+    /// Envia un evento tactil al telefono por el mismo socket del video.
+    pub fn enviar_toque(&self, tag: u32, x: i32, y: i32) {
+        let Ok(mut guardado) = self.control.lock() else { return };
+        let Some(socket) = guardado.as_mut() else { return };
+
+        let mut buffer = [0u8; 12];
+        buffer[0..4].copy_from_slice(&tag.to_be_bytes());
+        buffer[4..8].copy_from_slice(&x.to_be_bytes());
+        buffer[8..12].copy_from_slice(&y.to_be_bytes());
+
+        if socket.write_all(&buffer).is_err() {
+            *guardado = None;
+        }
+    }
+
+    pub fn enviar_accion(&self, codigo: u32) {
+        let Ok(mut guardado) = self.control.lock() else { return };
+        let Some(socket) = guardado.as_mut() else { return };
+
+        let mut buffer = [0u8; 8];
+        buffer[0..4].copy_from_slice(&CTRL_ACCION.to_be_bytes());
+        buffer[4..8].copy_from_slice(&codigo.to_be_bytes());
+
+        if socket.write_all(&buffer).is_err() {
+            *guardado = None;
+        }
     }
 
     /// Zona util de la pantalla dentro del video cuadrado.
