@@ -14,5 +14,15 @@ winres = "0.1"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 strip = true
+
+# El decodificado y el escalado tambien deben ir rapido en depuracion,
+# o el video se ve a tirones mientras desarrollas.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

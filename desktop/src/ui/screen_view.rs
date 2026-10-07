@@ -266,20 +266,34 @@ fn manejar_raton(
     };
 
     // ── Rueda del raton ──
-    let mut soltado = false;
-
+    // egui reparte un golpe de rueda entre varios frames. Si se enviara cada
+    // trozo por separado, al telefono le llegarian trazos de pocos pixeles
+    // y Android los interpreta como toques. Se acumula y se manda uno solo.
     if respuesta.hovered() {
-        let desplazamiento = ui.input(|i| i.smooth_scroll_delta.y);
+        let delta = ui.input(|i| i.smooth_scroll_delta.y);
 
-        if desplazamiento.abs() > 0.5 {
+        if delta.abs() > 0.1 {
+            // De pixeles de la ventana a pixeles del dispositivo.
+            let proporcion = alto / marco.height().max(1.0);
+            app.scroll_acumulado += delta * proporcion * 2.5;
+        }
+
+        let pendiente = app.scroll_acumulado;
+
+        // Se envia al juntar recorrido suficiente, o al parar la rueda.
+        let suficiente = pendiente.abs() >= 90.0;
+        let detenido = delta.abs() <= 0.1 && pendiente.abs() >= 40.0;
+
+        if suficiente || detenido {
             if let Some(punto) = ui.input(|i| i.pointer.hover_pos()) {
                 let (x, y) = punto_a_dispositivo(punto);
-
-                // El signo se invierte: rueda hacia arriba mueve el dedo hacia abajo.
-                let delta_px = (desplazamiento * 4.0).clamp(-alto * 0.5, alto * 0.5);
-                app.stream.enviar_rueda(x, y, delta_px.round() as i32);
+                let recorrido = pendiente.clamp(-alto * 0.45, alto * 0.45);
+                app.stream.enviar_rueda(x, y, recorrido.round() as i32);
             }
+            app.scroll_acumulado = 0.0;
         }
+    } else if app.scroll_acumulado != 0.0 {
+        app.scroll_acumulado = 0.0;
     }
 
     // ── Toque y arrastre ──

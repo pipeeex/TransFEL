@@ -45,6 +45,8 @@ pub struct TransfelApp {
     pub control_activo: bool,
     /// Ultimo punto enviado, para no inundar el socket.
     pub ultimo_toque: Option<(i32, i32)>,
+    /// Rueda acumulada en pixeles del dispositivo, pendiente de enviar.
+    pub scroll_acumulado: f32,
 }
 
 impl TransfelApp {
@@ -70,6 +72,7 @@ impl TransfelApp {
 
             control_activo: false,
             ultimo_toque: None,
+            scroll_acumulado: 0.0,
 
             device_events: watcher::spawn(),
             info_tx,
@@ -158,7 +161,8 @@ impl TransfelApp {
         self.device.serial.as_deref()
     }
 
-    fn update_video(&mut self, ctx: &egui::Context) {
+    /// Devuelve true si llego un frame nuevo en este repintado.
+    fn update_video(&mut self, ctx: &egui::Context) -> bool {
         let live = self.stream.is_live();
 
         if live {
@@ -169,15 +173,15 @@ impl TransfelApp {
             self.texture = None;
             self.stream.drain();
             self.status = "Transmision finalizada".to_string();
-            return;
+            return false;
         }
 
         let Some(frame) = self.stream.latest_frame() else {
-            return;
+            return false;
         };
 
         if frame.data.len() != frame.width * frame.height * 4 {
-            return;
+            return false;
         }
         let image = egui::ColorImage::from_rgba_unmultiplied([frame.width, frame.height], &frame.data);
 
@@ -193,6 +197,8 @@ impl TransfelApp {
                 ));
             }
         }
+
+        true
     }
 }
 
@@ -201,7 +207,7 @@ impl eframe::App for TransfelApp {
         let ctx = ui.ctx().clone();
         self.poll_device();
         self.wifi.poll();
-        self.update_video(&ctx);
+        let frame_nuevo = self.update_video(&ctx);
 
         let serial = self.device.serial.clone();
         self.files.poll(serial.as_deref());
@@ -225,9 +231,15 @@ impl eframe::App for TransfelApp {
                 Tab::Conexion => ui::wifi_view::show(self, ui),
             });
 
-        // En vivo  60 fps. Si no, tick lento que igual detecta desconexiones.
-        if self.stream_state == StreamState::EnVivo || self.files.active_transfers() > 0 || self.files.loading {
-            ctx.request_repaint_after(Duration::from_millis(16));
+        // Solo se repinta cuando hay algo que mostrar. Antes se forzaban
+        // 60 fps aunque el video llegue a 30: la mitad del trabajo sobraba.
+        if frame_nuevo {
+            ctx.request_repaint();
+        } else if self.stream_state == StreamState::EnVivo {
+            // Margen para no quedarse dormido si el telefono se atasca.
+            ctx.request_repaint_after(Duration::from_millis(33));
+        } else if self.files.active_transfers() > 0 || self.files.loading {
+            ctx.request_repaint_after(Duration::from_millis(60));
         } else {
             ctx.request_repaint_after(Duration::from_millis(250));
         }

@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 
@@ -26,6 +26,28 @@ const MAX_PACKET: u32 = 20_000_000;
 
 pub type SharedRes = Arc<Mutex<(usize, usize)>>;
 
+/// Hueco de un solo frame. Sustituye al canal: el productor deja el frame
+/// nuevo y se lleva el anterior para reutilizar su memoria, asi no se asignan
+/// 10 MB en cada fotograma.
+pub type Hueco = Arc<Mutex<Option<Frame>>>;
+
+/// Lado maximo del video decodificado. Por encima de esto no se gana nitidez
+/// visible en pantalla y si se gasta mucho ancho de banda hacia la GPU.
+const LADO_MAXIMO: usize = 1080;
+
+/// Calcula el tamaño de salida respetando la proporcion.
+fn escalar(width: usize, height: usize) -> (usize, usize) {
+    let mayor = width.max(height);
+    if mayor <= LADO_MAXIMO {
+        return (width, height);
+    }
+    let factor = LADO_MAXIMO as f32 / mayor as f32;
+    (
+        ((width as f32 * factor) as usize) & !1,
+        ((height as f32 * factor) as usize) & !1,
+    )
+}
+
 
 pub struct Frame {
     pub width: usize,
@@ -34,7 +56,7 @@ pub struct Frame {
 }
 
 pub struct StreamServer {
-    pub rx: mpsc::Receiver<Frame>,
+    pub hueco: Hueco,
     pub frames: Arc<AtomicU64>,
     pub clients: Arc<AtomicUsize>,
     pub resolution: SharedRes,
@@ -46,7 +68,7 @@ pub struct StreamServer {
 
 impl StreamServer {
     pub fn start(width: usize, height: usize) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Frame>(1);
+        let hueco: Hueco = Arc::new(Mutex::new(None));
         let frames = Arc::new(AtomicU64::new(0));
         let clients = Arc::new(AtomicUsize::new(0));
         let resolution: SharedRes = Arc::new(Mutex::new((width, height)));
@@ -55,6 +77,7 @@ impl StreamServer {
         let content: SharedRes = Arc::new(Mutex::new((width, height)));
         let control: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
 
+        let hueco_bg = Arc::clone(&hueco);
         let frames_bg = Arc::clone(&frames);
         let clients_bg = Arc::clone(&clients);
         let res_bg = Arc::clone(&resolution);
@@ -72,7 +95,7 @@ impl StreamServer {
           for conn in listener.incoming() {
               let Ok(stream) = conn else { continue };
               let res = res_bg.lock().map(|r| *r).unwrap_or((720, 1280));
-              let tx = tx.clone();
+              let hueco = Arc::clone(&hueco_bg);
               let frames = Arc::clone(&frames_bg);
               let clients = Arc::clone(&clients_bg);
               let content = Arc::clone(&content_bg);
@@ -87,7 +110,7 @@ impl StreamServer {
 
               thread::spawn(move || {
                   clients.fetch_add(1, Ordering::Relaxed);
-                  handle_connection(stream, tx, frames, res, content);
+                  handle_connection(stream, hueco, frames, res, content);
                   if let Ok(mut guardado) = control.lock() {
                       *guardado = None;
                   }
@@ -97,7 +120,7 @@ impl StreamServer {
             }
         });
 
-        Self { rx, frames, clients, resolution, content, control }
+        Self { hueco, frames, clients, resolution, content, control }
     }
 
 
@@ -107,17 +130,16 @@ impl StreamServer {
     }
 
     /// Devuelve solo el frame mas reciente, descartando los atrasados.
+    /// Toma el frame mas reciente, si hay uno sin consumir.
     pub fn latest_frame(&self) -> Option<Frame> {
-        let mut last = None;
-        while let Ok(f) = self.rx.try_recv() {
-            last = Some(f);
-        }
-        last
+        self.hueco.lock().ok()?.take()
     }
 
     /// Vacia frames viejos para que no reaparezca la ultima imagen.
     pub fn drain(&self) {
-     while self.rx.try_recv().is_ok() {}
+        if let Ok(mut h) = self.hueco.lock() {
+            *h = None;
+        }
     }
 
     /// Rueda del raton: desplazamiento vertical en pixeles del dispositivo.
@@ -190,12 +212,18 @@ struct Decoder {
 }
 
 impl Decoder {
-    fn spawn(width: usize, height: usize, tx: mpsc::SyncSender<Frame>) -> Option<Self> {
+    fn spawn(width: usize, height: usize, hueco: Hueco) -> Option<Self> {
+        // Escalar en FFmpeg (SIMD, en C) sale mucho mas barato que mover
+        // frames enormes hasta la GPU en cada repintado.
+        let (ancho_salida, alto_salida) = escalar(width, height);
+        let filtro = format!("scale={ancho_salida}:{alto_salida}:flags=fast_bilinear");
+
         let mut child = adb::silent(adb::ffmpeg_path())
             .args([
                 "-loglevel", "warning",
                 "-f", "h264",
                 "-i", "pipe:0",
+                "-vf", &filtro,
                 "-f", "rawvideo",
                 "-pix_fmt", "rgba",
                 "-flush_packets", "1",
@@ -223,32 +251,42 @@ impl Decoder {
         }
 
         thread::spawn(move || {
-            let size = width * height * 4;
+            let size = ancho_salida * alto_salida * 4;
             let mut buf = vec![0u8; size];
             let mut decodificados: u64 = 0;
+
             loop {
                 if output.read_exact(&mut buf).is_err() {
                     println!("Decodificador terminado tras {decodificados} frames");
                     break;
                 }
+
                 decodificados += 1;
-                if decodificados == 1 || decodificados % 60 == 0 {
+                if decodificados == 1 || decodificados % 300 == 0 {
                     println!("Frames decodificados: {decodificados}");
                 }
+
                 let frame = Frame {
-                    width,
-                    height,
+                    width: ancho_salida,
+                    height: alto_salida,
                     data: std::mem::take(&mut buf),
                 };
-                match tx.try_send(frame) {
-                    Ok(()) => buf = vec![0u8; size],
-                    Err(mpsc::TrySendError::Full(devuelto)) => buf = devuelto.data,
-                    Err(mpsc::TrySendError::Disconnected(_)) => break,
-                }
+
+                // Se deja el frame nuevo y se recupera el anterior para
+                // reutilizar su memoria: en regimen no se asigna nada.
+                let anterior = match hueco.lock() {
+                    Ok(mut h) => h.replace(frame),
+                    Err(_) => break,
+                };
+
+                buf = match anterior {
+                    Some(viejo) if viejo.data.len() == size => viejo.data,
+                    _ => vec![0u8; size],
+                };
             }
         });
 
-        println!("Decodificador listo: {width}x{height}");
+        println!("Decodificador listo: {width}x{height} -> {ancho_salida}x{alto_salida}");
 
         Some(Self { child, input: Box::new(input), width, height })
     }
@@ -268,7 +306,7 @@ fn leer_u32(stream: &mut TcpStream) -> Option<u32> {
 
 fn handle_connection(
     mut stream: TcpStream,
-    tx: mpsc::SyncSender<Frame>,
+    hueco: Hueco,
     frames: Arc<AtomicU64>,
     (fallback_w, fallback_h): (usize, usize),
     content: SharedRes,
@@ -304,7 +342,7 @@ fn handle_connection(
                 if let Some(mut viejo) = decoder.take() {
                     viejo.kill();
                 }
-                decoder = Decoder::spawn(width, height, tx.clone());
+                decoder = Decoder::spawn(width, height, Arc::clone(&hueco));
             }
             continue;
         }
@@ -346,7 +384,7 @@ fn handle_connection(
         // APK antigua que nunca manda el tamano: usamos el de respaldo.
         if decoder.is_none() {
             println!("Sin paquete de tamaño, usando {fallback_w}x{fallback_h}");
-            decoder = Decoder::spawn(fallback_w, fallback_h, tx.clone());
+            decoder = Decoder::spawn(fallback_w, fallback_h, Arc::clone(&hueco));
         }
 
         let Some(dec) = decoder.as_mut() else { continue };
