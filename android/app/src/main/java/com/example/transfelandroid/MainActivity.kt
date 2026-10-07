@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
     private var estado by mutableStateOf(EstadoTransmision.INACTIVA)
     private var mensaje by mutableStateOf("Listo para transmitir")
     private var pausada by mutableStateOf(false)
+    private var controlActivo by mutableStateOf(false)
 
     private val registro: SnapshotStateList<String> = mutableStateListOf()
 
@@ -145,6 +146,8 @@ class MainActivity : ComponentActivity() {
                     mensaje = mensaje,
                     pausada = pausada,
                     registro = registro,
+                    controlActivo = controlActivo,
+                    onAbrirAccesibilidad = ::abrirAccesibilidad,
                     onIniciar = ::solicitarCaptura,
                     onPausar = ::alternarPausa,
                     onTerminar = ::terminar,
@@ -155,7 +158,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        controlActivo = ControlService.activo
         resincronizar()
+    }
+
+    private fun abrirAccesibilidad() {
+        runCatching {
+            startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }.onFailure {
+            anotar("No se pudo abrir Ajustes de Accesibilidad")
+        }
     }
 
     /** Alinea la UI con lo que el servicio esta haciendo de verdad. */
@@ -279,6 +291,8 @@ private fun PantallaPrincipal(
     mensaje: String,
     pausada: Boolean,
     registro: List<String>,
+    controlActivo: Boolean,
+    onAbrirAccesibilidad: () -> Unit,
     onIniciar: () -> Unit,
     onPausar: () -> Unit,
     onTerminar: () -> Unit,
@@ -331,7 +345,11 @@ private fun PantallaPrincipal(
             )
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
+
+        TarjetaControl(controlActivo = controlActivo, onAbrir = onAbrirAccesibilidad)
+
+        Spacer(Modifier.height(16.dp))
 
         Ayuda(estado)
 
@@ -539,6 +557,66 @@ private fun Registro(registro: List<String>) {
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 16.sp,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TarjetaControl(controlActivo: Boolean, onAbrir: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Tarjeta)
+            .border(
+                1.dp,
+                if (controlActivo) Exito.copy(alpha = 0.5f) else Borde,
+                RoundedCornerShape(12.dp),
+            )
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(if (controlActivo) Exito else Apagado),
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                text = if (controlActivo) "Control remoto activo" else "Control remoto desactivado",
+                color = if (controlActivo) Exito else Apagado,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = if (controlActivo) {
+                "Puedes manejar el telefono con el raton desde el PC mientras transmites."
+            } else {
+                "Para manejar el telefono desde el PC, activa TransFEL en Ajustes de Accesibilidad."
+            },
+            color = Color(0xFFBFBFC9),
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+        )
+
+        if (!controlActivo) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onAbrir,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = TarjetaAlta,
+                    contentColor = Acento,
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Acento.copy(alpha = 0.5f)),
+            ) {
+                Text("Abrir Ajustes de Accesibilidad", fontSize = 13.sp)
             }
         }
     }

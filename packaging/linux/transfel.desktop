@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TransFEL
+GenericName=Android screen mirroring
+Comment=Mirror your Android screen and transfer files over USB or Wi-Fi
+Exec=transfel
+Icon=transfel
+Terminal=false
+Categories=Utility;Network;RemoteAccess;
+Keywords=android;mirror;screen;adb;transfer;

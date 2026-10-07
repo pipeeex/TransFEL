@@ -36,3 +36,7 @@ Thumbs.db
 *.jks
 *.keystore
 
+
+# Empaquetado
+dist/
+installer/salida/

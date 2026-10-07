@@ -31,6 +31,22 @@
         </activity>
 
         <service
+            android:name=".ControlService"
+            android:exported="true"
+            android:label="TransFEL - Control remoto"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/control_accesibilidad" />
+
+        </service>
+
+        <service
             android:name=".ScreenCaptureService"
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />

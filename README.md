@@ -23,6 +23,10 @@ by hand.
 The project has two parts — a **Kotlin** app that runs on the phone and a **Rust** desktop
 application for Windows.
 
+## Screenshots
+
+> _Add screenshots here: `docs/screenshots/mirror.png`, `docs/screenshots/files.png`,
+> `docs/screenshots/connection.png`_
 
 ## Features
 
@@ -106,7 +110,7 @@ which keeps browsing instant on devices with tens of thousands of photos.
 ### 1. Install the desktop application
 
 Download `TransFEL-Setup.exe` from the
-[Releases](https://github.com/pipeeex/TransFEL/releases) page and run it.
+[Releases](https://github.com/YOUR_USERNAME/TransFEL/releases) page and run it.
 
 The installer bundles ADB and FFmpeg inside the application folder. Nothing is added to the
 system `PATH` and no existing ADB or FFmpeg installation is modified.
@@ -225,7 +229,7 @@ Configuration (the last Wi-Fi address) is stored in `%APPDATA%\TransFEL\`.
 Requires the [Rust toolchain](https://rustup.rs/) (stable).
 
 ```bash
-git clone https://github.com/pipeeex/TransFEL.git
+git clone https://github.com/YOUR_USERNAME/TransFEL.git
 cd TransFEL/desktop
 cargo build --release
 ```

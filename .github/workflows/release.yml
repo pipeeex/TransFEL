@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────── Windows ───────────────────────────
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - name: Compilar
+        working-directory: desktop
+        run: cargo build --release
+
+      - name: Descargar FFmpeg y ADB
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/tools | Out-Null
+
+          # FFmpeg (build GPL de gyan.dev)
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter ffmpeg.exe).FullName dist/tools/
+          Copy-Item (Get-ChildItem ffmpeg-tmp -Recurse -Filter LICENSE | Select-Object -First 1).FullName licenses/FFMPEG-LICENSE.txt
+
+          # Android Platform-Tools (adb)
+          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile platform-tools.zip
+          Expand-Archive platform-tools.zip -DestinationPath pt-tmp
+          Copy-Item pt-tmp/platform-tools/adb.exe dist/tools/
+          Copy-Item pt-tmp/platform-tools/AdbWinApi.dll dist/tools/
+          Copy-Item pt-tmp/platform-tools/AdbWinUsbApi.dll dist/tools/
+
+      - name: Preparar carpeta de distribucion
+        shell: pwsh
+        run: |
+          Copy-Item desktop/target/release/TransFEL.exe dist/
+          Copy-Item LICENSE dist/LICENSE.txt
+          Copy-Item README.md dist/
+          New-Item -ItemType Directory -Force -Path dist/licenses | Out-Null
+          Copy-Item licenses/* dist/licenses/
+
+      - name: Portable (zip)
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath TransFEL-${{ github.ref_name }}-windows-x64-portable.zip
+
+      - name: Instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMiVersion="${{ github.ref_name }}" installer/transfel.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            TransFEL-*-windows-x64-portable.zip
+            installer/salida/*.exe
+
+  # ──────────────────────────── Linux ────────────────────────────
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config \
+            libgtk-3-dev libxkbcommon-dev libwayland-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-x11-dev libssl-dev
+
+      - name: Compilar
+        working-directory: desktop
+        run: cargo build --release
+
+      - name: Empaquetar
+        run: |
+          VERSION="${{ github.ref_name }}"
+          DIR="TransFEL-$VERSION-linux-x86_64"
+
+          mkdir -p "$DIR"
+          cp desktop/target/release/TransFEL "$DIR/transfel"
+          chmod +x "$DIR/transfel"
+          cp LICENSE README.md "$DIR/"
+          cp -r licenses "$DIR/"
+          cp packaging/linux/transfel.desktop "$DIR/"
+          cp packaging/linux/instalar.sh "$DIR/"
+          chmod +x "$DIR/instalar.sh"
+
+          tar -czf "$DIR.tar.gz" "$DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: TransFEL-*-linux-x86_64.tar.gz
+
+  # ─────────────────────────── Publicar ──────────────────────────
+  publicar:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefactos
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artefactos/**/*
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            ## TransFEL ${{ github.ref_name }}
+
+            Primera version publica. Transmite la pantalla de tu Android al PC,
+            controlala con el raton y transfiere archivos en ambos sentidos,
+            por USB o por WiFi.
+
+            ### Descargas
+
+            | Archivo | Para |
+            |---|---|
+            | `TransFEL-Setup-*.exe` | Windows 10/11 — instalador, incluye ADB y FFmpeg |
+            | `TransFEL-*-windows-x64-portable.zip` | Windows sin instalar |
+            | `TransFEL-*-linux-x86_64.tar.gz` | Linux — necesita `adb` y `ffmpeg` del sistema |
+            | `TransFEL.apk` | La aplicacion Android (subirla a mano) |
+
+            ### Primeros pasos
+
+            1. Instala la app de escritorio y el APK en el telefono.
+            2. Activa **Depuracion USB** en Opciones de desarrollador.
+            3. Conecta el cable y abre TransFEL: detecta el dispositivo solo.
+            4. Para ir sin cable, pestana **Conexion → Activar conexion WiFi**.
+
+            ### Problemas conocidos
+
+            - Si Android Studio esta reflejando el mismo telefono, las dos
+              capturas compiten y la transmision se congela. Cierra una.
+            - Algunas apps (bancos sobre todo) bloquean los servicios de
+              accesibilidad: ahi el control remoto no responde.
+            - Las transferencias no muestran progreso por archivo, solo estado.
+            - Los archivos con el mismo nombre se sobrescriben sin preguntar.

@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">TransFELAndroid</string>
+    <string name="app_name">TransFEL</string>
+    <string name="control_descripcion">Permite que TransFEL reproduzca en el telefono los toques y gestos que haces desde el PC mientras la pantalla se esta transmitiendo.</string>
 </resources>

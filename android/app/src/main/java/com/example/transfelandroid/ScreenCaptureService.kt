@@ -1,6 +1,7 @@
 package com.example.transfelandroid
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -8,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.drawable.Icon
 import android.hardware.display.VirtualDisplay
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -16,7 +18,9 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
 import android.view.Surface
+import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.DataInputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import android.hardware.display.DisplayManager
@@ -39,6 +43,13 @@ class ScreenCaptureService : Service() {
         const val TIPO_ERROR = "ERROR"
         const val TAG_RESIZE = -65535   // 0xFFFF0001: tamaño del video
         const val TAG_CROP = -65534     // 0xFFFF0002: area util dentro del video
+
+        // Eventos que llegan del PC (control remoto).
+        const val CTRL_RUEDA = 0x0105
+        const val CTRL_ABAJO = 0x0101
+        const val CTRL_MOVER = 0x0102
+        const val CTRL_ARRIBA = 0x0103
+        const val CTRL_ACCION = 0x0104   // atras / inicio / recientes
 
         /** La UI lo consulta al volver a primer plano para resincronizarse. */
         @Volatile
@@ -153,6 +164,8 @@ class ScreenCaptureService : Service() {
                     } else {
                         enviarEvento(TIPO_TRANSMITIENDO, "Transmision reanudada")
                     }
+
+                    actualizarNotificacion()
                 }
             }
         }
@@ -449,6 +462,10 @@ class ScreenCaptureService : Service() {
                 // Recien ahora los frames pueden salir.
                 outputStream = salida
 
+                // Canal de vuelta: el PC manda los eventos de control por el
+                // mismo socket. TCP es full-duplex, no hace falta otro puerto.
+                escucharControl(nuevoSocket)
+
                 enviarEvento(TIPO_CONECTANDO, "Conectado al PC, esperando video")
 
                 // Ahora si: encoder + VirtualDisplay, con el socket ya abierto.
@@ -457,6 +474,64 @@ class ScreenCaptureService : Service() {
             } catch (e: Exception) {
                 enviarEvento(TIPO_ERROR, "No se pudo conectar al PC. ¿Esta abierto TransFEL?")
             }
+        }.start()
+    }
+
+    /** Lee los eventos de control que envia el PC por el mismo socket. */
+    private fun escucharControl(socketActivo: java.net.Socket) {
+        Thread {
+            try {
+                val entrada = DataInputStream(
+                    BufferedInputStream(socketActivo.getInputStream())
+                )
+
+                enviarEstado("Control: escuchando al PC")
+
+                while (!socketActivo.isClosed) {
+                    val tag = entrada.readInt()
+
+                    when (tag) {
+                        CTRL_RUEDA -> {
+                            val x = entrada.readInt().toFloat()
+                            val y = entrada.readInt().toFloat()
+                            val delta = entrada.readInt().toFloat()
+                            ControlService.instancia?.rueda(x, y, delta)
+                        }
+                        CTRL_ABAJO, CTRL_MOVER, CTRL_ARRIBA -> {
+                            val x = entrada.readInt().toFloat()
+                            val y = entrada.readInt().toFloat()
+
+                            val control = ControlService.instancia
+                            if (control == null) {
+                                // Sin servicio de accesibilidad no hay nada que hacer.
+                                continue
+                            }
+
+                            when (tag) {
+                                CTRL_ABAJO -> control.abajo(x, y)
+                                CTRL_MOVER -> control.mover(x, y)
+                                CTRL_ARRIBA -> control.arriba(x, y)
+                            }
+                        }
+
+                        CTRL_ACCION -> {
+                            val codigo = entrada.readInt()
+                            ControlService.instancia?.accionGlobal(codigo)
+                        }
+
+                        else -> {
+                            enviarEstado("Control: paquete desconocido ($tag)")
+                        }
+                    }
+                }
+
+            } catch (e: Exception) {
+                if (running) {
+                    enviarEstado("Control: canal cerrado (${e.message})")
+                }
+            }
+
+            ControlService.instancia?.cancelar()
         }.start()
     }
 
@@ -795,21 +870,69 @@ class ScreenCaptureService : Service() {
     }
 
     private fun createNotification(): Notification {
+        val estado = if (transmisionPausada) "Transmision en pausa" else "Transmitiendo pantalla"
 
-        return Notification.Builder(
-            this,
-            "transfel_capture"
-        )
-            .setContentTitle(
-                "TransFEL"
-            )
-            .setContentText(
-                "Capturando pantalla"
-            )
-            .setSmallIcon(
-                android.R.drawable.ic_menu_view
-            )
+        val accionPausa = Notification.Action.Builder(
+            Icon.createWithResource(
+                this,
+                if (transmisionPausada) {
+                    android.R.drawable.ic_media_play
+                } else {
+                    android.R.drawable.ic_media_pause
+                },
+            ),
+            if (transmisionPausada) "Reanudar" else "Pausar",
+            intentDifundido(ACTION_PAUSAR, 10, !transmisionPausada),
+        ).build()
+
+        val accionTerminar = Notification.Action.Builder(
+            Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+            "Finalizar",
+            intentDifundido(ACTION_TERMINAR, 11, null),
+        ).build()
+
+        val notificacion = Notification.Builder(this, "transfel_capture")
+            .setContentTitle("TransFEL")
+            .setContentText(estado)
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setShowWhen(false)
+            .setAutoCancel(false)
+            .addAction(accionPausa)
+            .addAction(accionTerminar)
             .build()
+
+        // FLAG_NO_CLEAR impide que se descarte al deslizar o con "borrar todo".
+        notificacion.flags = notificacion.flags or
+            Notification.FLAG_NO_CLEAR or
+            Notification.FLAG_ONGOING_EVENT or
+            Notification.FLAG_FOREGROUND_SERVICE
+
+        return notificacion
+    }
+
+    /** PendingIntent que dispara uno de nuestros broadcasts internos. */
+    private fun intentDifundido(accion: String, codigo: Int, pausada: Boolean?): PendingIntent {
+        val intent = Intent(accion).apply {
+            setPackage(packageName)
+            if (pausada != null) putExtra("pausada", pausada)
+        }
+
+        return PendingIntent.getBroadcast(
+            this,
+            codigo,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /** Redibuja la notificacion para que los botones reflejen el estado. */
+    private fun actualizarNotificacion() {
+        runCatching {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(1, createNotification())
+        }
     }
 
     override fun onDestroy() {
