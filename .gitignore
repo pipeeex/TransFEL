@@ -41,3 +41,5 @@ Thumbs.db
 dist/
 installer/salida/
 
+desktop/tools/
+android/app/release/

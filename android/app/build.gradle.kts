@@ -10,7 +10,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.transfelandroid"
+        applicationId = "dev.pipeeex.transfel"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
