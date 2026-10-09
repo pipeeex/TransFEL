@@ -29,9 +29,12 @@ if [ ${#faltan[@]} -gt 0 ]; then
 fi
 
 # ── Copiar ──
-mkdir -p "$DESTINO" "$ESCRITORIO"
+ICONOS="$HOME/.local/share/icons/hicolor/256x256/apps"
+
+mkdir -p "$DESTINO" "$ESCRITORIO" "$ICONOS"
 install -m 755 "$AQUI/transfel" "$DESTINO/transfel"
 install -m 644 "$AQUI/transfel.desktop" "$ESCRITORIO/transfel.desktop"
+[ -f "$AQUI/transfel.png" ] && install -m 644 "$AQUI/transfel.png" "$ICONOS/transfel.png"
 
 command -v update-desktop-database >/dev/null 2>&1 \
     && update-desktop-database "$ESCRITORIO" 2>/dev/null || true

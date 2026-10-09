@@ -1,4 +1,8 @@
-﻿mod adb;
+// Sin ventana de consola en Windows. Solo en release: en depuracion
+// conviene conservarla para ver los println! del decodificador.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod adb;
 mod app;
 mod device;
 mod files;

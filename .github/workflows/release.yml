@@ -74,8 +74,13 @@ jobs:
             installer/salida/*.exe
 
   # ──────────────────────────── Linux ────────────────────────────
+  # Se compila sobre Ubuntu 22.04 a proposito: el binario necesita una glibc
+  # igual o mas antigua que la del equipo donde se ejecute.
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1   # los runners no traen libfuse2
+
     steps:
       - uses: actions/checkout@v4
 
@@ -92,13 +97,66 @@ jobs:
             build-essential pkg-config \
             libgtk-3-dev libxkbcommon-dev libwayland-dev \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-x11-dev libssl-dev
+            libxkbcommon-x11-dev libssl-dev file desktop-file-utils
 
       - name: Compilar
         working-directory: desktop
         run: cargo build --release
 
-      - name: Empaquetar
+      - name: Descargar FFmpeg y ADB
+        run: |
+          mkdir -p herramientas
+
+          # FFmpeg estatico: no depende de nada del sistema.
+          curl -sSL -o ffmpeg.tar.xz \
+            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          tar -xf ffmpeg.tar.xz
+          cp ffmpeg-*-amd64-static/ffmpeg herramientas/
+          cp ffmpeg-*-amd64-static/GPLv3.txt licenses/FFMPEG-LICENSE.txt || true
+
+          # Android Platform-Tools (adb)
+          curl -sSL -o platform-tools.zip \
+            https://dl.google.com/android/repository/platform-tools-latest-linux.zip
+          unzip -q platform-tools.zip
+          cp platform-tools/adb herramientas/
+
+          chmod +x herramientas/*
+
+      - name: Construir el AppImage
+        run: |
+          APPDIR=AppDir
+          mkdir -p $APPDIR/usr/bin/tools
+          mkdir -p $APPDIR/usr/share/applications
+          mkdir -p $APPDIR/usr/share/icons/hicolor/256x256/apps
+
+          cp desktop/target/release/TransFEL $APPDIR/usr/bin/transfel
+          chmod +x $APPDIR/usr/bin/transfel
+
+          # Junto al ejecutable, igual que en Windows: locate() los encuentra solo.
+          cp herramientas/ffmpeg herramientas/adb $APPDIR/usr/bin/tools/
+
+          cp packaging/linux/transfel.desktop $APPDIR/usr/share/applications/
+          cp packaging/icono/transfel.png $APPDIR/usr/share/icons/hicolor/256x256/apps/
+
+          cp LICENSE $APPDIR/
+          cp -r licenses $APPDIR/
+
+          curl -sSL -o linuxdeploy.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy.AppImage
+
+          ./linuxdeploy.AppImage \
+            --appdir $APPDIR \
+            --desktop-file packaging/linux/transfel.desktop \
+            --icon-file packaging/icono/transfel.png \
+            --output appimage
+
+          # Fuera la herramienta, o el mv de abajo la confundiria con el resultado.
+          rm -f linuxdeploy.AppImage
+
+          mv *.AppImage "TransFEL-${{ github.ref_name }}-x86_64.AppImage"
+
+      - name: Empaquetar tar.gz ligero
         run: |
           VERSION="${{ github.ref_name }}"
           DIR="TransFEL-$VERSION-linux-x86_64"
@@ -109,15 +167,18 @@ jobs:
           cp LICENSE README.md "$DIR/"
           cp -r licenses "$DIR/"
           cp packaging/linux/transfel.desktop "$DIR/"
-          cp packaging/linux/instalar.sh "$DIR/"
-          chmod +x "$DIR/instalar.sh"
+          cp packaging/icono/transfel.png "$DIR/"
+          cp packaging/linux/instalar.sh packaging/linux/desinstalar.sh "$DIR/"
+          chmod +x "$DIR"/*.sh
 
           tar -czf "$DIR.tar.gz" "$DIR"
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: TransFEL-*-linux-x86_64.tar.gz
+          path: |
+            TransFEL-*-x86_64.AppImage
+            TransFEL-*-linux-x86_64.tar.gz
 
   # ─────────────────────────── Publicar ──────────────────────────
   publicar:
@@ -148,7 +209,8 @@ jobs:
             |---|---|
             | `TransFEL-Setup-*.exe` | Windows 10/11 — instalador, incluye ADB y FFmpeg |
             | `TransFEL-*-windows-x64-portable.zip` | Windows sin instalar |
-            | `TransFEL-*-linux-x86_64.tar.gz` | Linux — necesita `adb` y `ffmpeg` del sistema |
+            | `TransFEL-*-x86_64.AppImage` | Linux — un solo archivo, no instala nada |
+            | `TransFEL-*-linux-x86_64.tar.gz` | Linux ligero — usa el `adb` y `ffmpeg` del sistema |
             | `TransFEL.apk` | La aplicacion Android (subirla a mano) |
 
             ### Primeros pasos
