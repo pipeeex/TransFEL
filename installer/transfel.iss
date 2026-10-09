@@ -2,11 +2,11 @@
 ; Compilar:  ISCC.exe /DMiVersion="v0.1.0" installer\transfel.iss
 
 #ifndef MiVersion
-  #define MiVersion "v0.1.0"
+  #define MiVersion "v0.1.1"
 #endif
 
 #define MiNombre "TransFEL"
-#define MiAutor "Juan Pablo"
+#define MiAutor "Felipe Villaquiran"
 #define MiUrl "https://github.com/pipeeex/TransFEL"
 #define MiEjecutable "TransFEL.exe"
 
@@ -26,6 +26,8 @@ OutputBaseFilename=TransFEL-Setup-{#MiVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; Icono del propio instalador y de Agregar o quitar programas
+SetupIconFile=..\packaging\icono\transfel.ico
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 PrivilegesRequired=admin
