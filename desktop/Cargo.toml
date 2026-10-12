@@ -1,6 +1,6 @@
 [package]
 name = "TransFEL"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 license = "GPL-3.0-only"
 
@@ -9,8 +9,13 @@ eframe = "0.36.1"
 egui = "0.32"
 rfd    = "0.15"   # selector de archivos nativo del PC
 
+# Solo para las miniaturas: se decodifica y se reduce en el PC.
+image  = { version = "0.25", default-features = false, features = [
+    "jpeg", "png", "gif", "webp", "bmp",
+] }
+
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

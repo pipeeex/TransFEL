@@ -3,6 +3,7 @@ use crate::watcher::{self, DeviceEvent, DeviceSummary};
 use crate::wifi::WifiManager;
 use crate::files::FileManager;
 use crate::stream::StreamServer;
+use crate::thumbs::Miniaturas;
 use crate::ui;
 use eframe::egui;
 use std::time::Duration;
@@ -47,6 +48,9 @@ pub struct TransfelApp {
     pub ultimo_toque: Option<(i32, i32)>,
     /// Rueda acumulada en pixeles del dispositivo, pendiente de enviar.
     pub scroll_acumulado: f32,
+
+    /// Miniaturas de imagenes y video en el gestor de archivos.
+    pub miniaturas: Miniaturas,
 }
 
 impl TransfelApp {
@@ -73,6 +77,7 @@ impl TransfelApp {
             control_activo: false,
             ultimo_toque: None,
             scroll_acumulado: 0.0,
+            miniaturas: Miniaturas::default(),
 
             device_events: watcher::spawn(),
             info_tx,
@@ -207,6 +212,7 @@ impl eframe::App for TransfelApp {
         let ctx = ui.ctx().clone();
         self.poll_device();
         self.wifi.poll();
+        self.miniaturas.poll(&ctx);
         let frame_nuevo = self.update_video(&ctx);
 
         let serial = self.device.serial.clone();

@@ -112,4 +112,17 @@ pub fn getprop(serial: &str, prop: &str) -> Option<String> {
     shell(serial, &format!("getprop {prop}"))
 }
 
+/// Igual que `shell`, pero devuelve los bytes crudos sin tocar saltos de
+/// linea. Imprescindible para traer imagenes del dispositivo.
+pub fn exec_out(serial: &str, cmd: &str) -> Option<Vec<u8>> {
+    let salida = silent(adb_path())
+        .args(["-s", serial, "exec-out", cmd])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
 
+    if !salida.status.success() || salida.stdout.is_empty() {
+        return None;
+    }
+    Some(salida.stdout)
+}

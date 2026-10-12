@@ -3,6 +3,7 @@ use crate::files::{
     human_size, AndroidDest, Category, Scope, Side, TransferState, ANDROID_SHORTCUTS, PC_SHORTCUTS,
 };
 use crate::theme;
+use crate::thumbs;
 use crate::ui::{card, section_label};
 use eframe::egui;
 
@@ -215,6 +216,23 @@ fn filters_card(app: &mut TransfelApp, ui: &mut egui::Ui) {
                     if app.files.filters_active() && ui.small_button("✕ Quitar filtros").clicked() {
                         app.files.clear_filters(serial.as_deref());
                     }
+
+                    ui.add_space(10.0);
+                    if ui
+                        .checkbox(&mut app.miniaturas.activadas, "Vista previa")
+                        .on_hover_text(
+                            "Muestra el contenido de fotos y videos en vez del icono. \
+                             Desactivala si vas con poca conexion.",
+                        )
+                        .changed()
+                        && !app.miniaturas.activadas
+                    {
+                        app.miniaturas.limpiar();
+                    }
+
+                    if app.miniaturas.pendientes() > 0 {
+                        ui.spinner();
+                    }
                 });
             });
 
@@ -326,8 +344,8 @@ fn file_list(app: &mut TransfelApp, ui: &mut egui::Ui) {
                         .show(ui, |ui| {
                             ui.set_width(row_w - 24.0);
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(entry.icon()).size(18.0));
-                                ui.add_space(6.0);
+                                vista_previa(app, ui, entry);
+                                ui.add_space(8.0);
 
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -592,4 +610,75 @@ fn history_section(app: &mut TransfelApp, ui: &mut egui::Ui) {
                 }
             });
         });
+}
+
+/// Dibuja la miniatura del archivo, o su icono si no hay (o no se puede).
+fn vista_previa(app: &mut TransfelApp, ui: &mut egui::Ui, entry: &crate::files::FileEntry) {
+    const LADO: f32 = 42.0;
+
+    let (hueco, _) = ui.allocate_exact_size(egui::vec2(LADO, LADO), egui::Sense::hover());
+
+    // El limite de tamaño solo aplica a las fotos: esas se traen enteras.
+    // De un video solo se leen unos pocos megas, da igual lo que ocupe.
+    let miniaturizable = !entry.is_dir
+        && match entry.category {
+            Category::Fotos => entry.size == 0 || entry.size <= thumbs::TAMANO_MAXIMO,
+            Category::Video => true,
+            _ => false,
+        };
+
+    if miniaturizable {
+        let clase = if entry.category == Category::Fotos {
+            thumbs::Clase::Imagen
+        } else {
+            thumbs::Clase::Video
+        };
+
+        let origen = match app.files.side {
+            Side::Pc => Some(thumbs::Origen::Pc(entry.path.clone())),
+            Side::Android => app
+                .device
+                .serial
+                .clone()
+                .map(|serial| thumbs::Origen::Android(serial, entry.path.clone())),
+        };
+
+        if let Some(origen) = origen {
+            if let Some(textura) = app.miniaturas.obtener(&entry.path, origen, clase) {
+                let tamano = textura.size_vec2();
+                let escala = (LADO / tamano.x).min(LADO / tamano.y);
+                let marco = egui::Rect::from_center_size(hueco.center(), tamano * escala);
+
+                let pintor = ui.painter();
+                pintor.rect_filled(marco, 4.0, theme::VIDEO_BG);
+                pintor.image(
+                    textura.id(),
+                    marco,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+
+                // Marca de video sobre la miniatura.
+                if entry.category == Category::Video {
+                    pintor.text(
+                        marco.right_bottom() - egui::vec2(8.0, 8.0),
+                        egui::Align2::CENTER_CENTER,
+                        "\u{25b6}",
+                        egui::FontId::proportional(11.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+                return;
+            }
+        }
+    }
+
+    // Sin miniatura: el icono de siempre.
+    ui.painter().text(
+        hueco.center(),
+        egui::Align2::CENTER_CENTER,
+        entry.icon(),
+        egui::FontId::proportional(19.0),
+        theme::MUTED,
+    );
 }

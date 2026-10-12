@@ -26,12 +26,10 @@ OutputBaseFilename=TransFEL-Setup-{#MiVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; Icono del propio instalador y de Agregar o quitar programas
-SetupIconFile=..\packaging\icono\transfel.ico
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 PrivilegesRequired=admin
-UninstallDisplayIcon={app}\{#MiEjecutable}
+UninstallDisplayIcon={app}\transfel.ico
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -51,11 +49,12 @@ Source: "..\dist\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion recurses
 Source: "..\dist\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs
+Source: "..\packaging\icono\transfel.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MiNombre}"; Filename: "{app}\{#MiEjecutable}"
+Name: "{group}\{#MiNombre}"; Filename: "{app}\{#MiEjecutable}"; IconFilename: "{app}\transfel.ico"
 Name: "{group}\Desinstalar {#MiNombre}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MiNombre}"; Filename: "{app}\{#MiEjecutable}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MiNombre}"; Filename: "{app}\{#MiEjecutable}"; IconFilename: "{app}\transfel.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MiEjecutable}"; Description: "{cm:LaunchProgram,{#MiNombre}}"; Flags: nowait postinstall skipifsilent
