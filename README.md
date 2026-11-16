@@ -21,11 +21,6 @@ setup over USB, everything works wirelessly on your local network.
 The project has two parts — a **Kotlin** app that runs on the phone and a **Rust**
 desktop application.
 
-## Screenshots
-
-> _Add screenshots here: `docs/screenshots/mirror.png`, `docs/screenshots/files.png`,
-> `docs/screenshots/connection.png`_
-
 ## Features
 
 **Screen mirroring**
